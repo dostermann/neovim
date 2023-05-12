@@ -65,7 +65,7 @@ void hash_clear(hashtab_T *ht)
 /// Free the array of a hash table and all contained values.
 ///
 /// @param off the offset from start of value to start of key (@see hashitem_T).
-void hash_clear_all(hashtab_T *ht, unsigned int off)
+void hash_clear_all(hashtab_T *ht, unsigned off)
 {
   size_t todo = ht->ht_used;
   for (hashitem_T *hi = ht->ht_array; todo > 0; hi++) {
@@ -207,7 +207,7 @@ int hash_add(hashtab_T *ht, char *key)
   hash_T hash = hash_hash(key);
   hashitem_T *hi = hash_lookup(ht, key, strlen(key), hash);
   if (!HASHITEM_EMPTY(hi)) {
-    internal_error("hash_add()");
+    siemsg(_("E685: Internal error: hash_add(): duplicate key \"%s\""), key);
     return FAIL;
   }
   hash_add_item(ht, hi, key, hash);
@@ -457,8 +457,8 @@ hash_T hash_hash_len(const char *key, const size_t len)
 ///
 /// Used for testing because luajit ffi does not allow getting addresses of
 /// globals.
-const char_u *_hash_key_removed(void)
+const char *_hash_key_removed(void)
   FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT
 {
-  return (char_u *)HI_KEY_REMOVED;
+  return HI_KEY_REMOVED;
 }

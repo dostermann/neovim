@@ -821,9 +821,38 @@ int object_to_hl_id(Object obj, const char *what, Error *err)
   } else if (obj.type == kObjectTypeInteger) {
     return MAX((int)obj.data.integer, 0);
   } else {
-    api_set_error(err, kErrorTypeValidation,
-                  "%s is not a valid highlight", what);
+    api_set_error(err, kErrorTypeValidation, "Invalid highlight: %s", what);
     return 0;
+  }
+}
+
+char *api_typename(ObjectType t)
+{
+  switch (t) {
+  case kObjectTypeNil:
+    return "nil";
+  case kObjectTypeBoolean:
+    return "Boolean";
+  case kObjectTypeInteger:
+    return "Integer";
+  case kObjectTypeFloat:
+    return "Float";
+  case kObjectTypeString:
+    return "String";
+  case kObjectTypeArray:
+    return "Array";
+  case kObjectTypeDictionary:
+    return "Dict";
+  case kObjectTypeLuaRef:
+    return "Function";
+  case kObjectTypeBuffer:
+    return "Buffer";
+  case kObjectTypeWindow:
+    return "Window";
+  case kObjectTypeTabpage:
+    return "Tabpage";
+  default:
+    abort();
   }
 }
 
@@ -930,12 +959,14 @@ bool set_mark(buf_T *buf, String name, Integer line, Integer col, Error *err)
 }
 
 /// Get default statusline highlight for window
-const char *get_default_stl_hl(win_T *wp, bool use_winbar)
+const char *get_default_stl_hl(win_T *wp, bool use_winbar, int stc_hl_id)
 {
   if (wp == NULL) {
     return "TabLineFill";
   } else if (use_winbar) {
     return (wp == curwin) ? "WinBar" : "WinBarNC";
+  } else if (stc_hl_id > 0) {
+    return syn_id2name(stc_hl_id);
   } else {
     return (wp == curwin) ? "StatusLine" : "StatusLineNC";
   }

@@ -19,21 +19,14 @@ describe('vim.secure', function()
     local xstate = 'Xstate'
 
     setup(function()
+      clear{env={XDG_STATE_HOME=xstate}}
       helpers.mkdir_p(xstate .. pathsep .. (is_os('win') and 'nvim-data' or 'nvim'))
-    end)
-
-    teardown(function()
-      helpers.rmdir(xstate)
-    end)
-
-    before_each(function()
       helpers.write_file('Xfile', [[
         let g:foobar = 42
       ]])
-      clear{env={XDG_STATE_HOME=xstate}}
     end)
 
-    after_each(function()
+    teardown(function()
       os.remove('Xfile')
       helpers.rmdir(xstate)
     end)
@@ -48,6 +41,7 @@ describe('vim.secure', function()
         [4] = {reverse = true},
       })
 
+      --- XXX: screen:expect() may fail if this path is too long.
       local cwd = funcs.getcwd()
 
       -- Need to use feed_command instead of exec_lua because of the confirmation prompt
@@ -59,7 +53,7 @@ describe('vim.secure', function()
         {1:~                                                                               }|
         {2:                                                                                }|
         :lua vim.secure.read('Xfile')                                                   |
-        {3:]] .. cwd .. pathsep .. [[Xfile is untrusted}{MATCH:%s+}|
+        {3:]] .. cwd .. pathsep .. [[Xfile is not trusted.}{MATCH:%s+}|
         {3:[i]gnore, (v)iew, (d)eny, (a)llow: }^                                             |
       ]]}
       feed('d')
@@ -88,7 +82,7 @@ describe('vim.secure', function()
         {1:~                                                                               }|
         {2:                                                                                }|
         :lua vim.secure.read('Xfile')                                                   |
-        {3:]] .. cwd .. pathsep .. [[Xfile is untrusted}{MATCH:%s+}|
+        {3:]] .. cwd .. pathsep .. [[Xfile is not trusted.}{MATCH:%s+}|
         {3:[i]gnore, (v)iew, (d)eny, (a)llow: }^                                             |
       ]]}
       feed('a')
@@ -118,7 +112,7 @@ describe('vim.secure', function()
         {1:~                                                                               }|
         {2:                                                                                }|
         :lua vim.secure.read('Xfile')                                                   |
-        {3:]] .. cwd .. pathsep .. [[Xfile is untrusted}{MATCH:%s+}|
+        {3:]] .. cwd .. pathsep .. [[Xfile is not trusted.}{MATCH:%s+}|
         {3:[i]gnore, (v)iew, (d)eny, (a)llow: }^                                             |
       ]]}
       feed('i')
@@ -145,7 +139,7 @@ describe('vim.secure', function()
         {1:~                                                                               }|
         {2:                                                                                }|
         :lua vim.secure.read('Xfile')                                                   |
-        {3:]] .. cwd .. pathsep .. [[Xfile is untrusted}{MATCH:%s+}|
+        {3:]] .. cwd .. pathsep .. [[Xfile is not trusted.}{MATCH:%s+}|
         {3:[i]gnore, (v)iew, (d)eny, (a)llow: }^                                             |
       ]]}
       feed('v')
@@ -153,7 +147,7 @@ describe('vim.secure', function()
           ^let g:foobar = 42                                                             |
         {1:~                                                                               }|
         {1:~                                                                               }|
-        {2:]] .. funcs.fnamemodify(cwd, ':~') .. pathsep .. [[Xfile [RO]{MATCH:%s+}|
+        {2:]] .. funcs.fnamemodify(cwd, ':~') .. pathsep .. [[Xfile [RO]{MATCH:%s+}}|
                                                                                         |
         {1:~                                                                               }|
         {4:[No Name]                                                                       }|
@@ -174,6 +168,7 @@ describe('vim.secure', function()
     local xstate = 'Xstate'
 
     setup(function()
+      clear{env={XDG_STATE_HOME=xstate}}
       helpers.mkdir_p(xstate .. pathsep .. (is_os('win') and 'nvim-data' or 'nvim'))
     end)
 

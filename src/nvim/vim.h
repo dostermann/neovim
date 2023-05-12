@@ -140,7 +140,6 @@ enum {
   EXPAND_SHELLCMD,
   EXPAND_SIGN,
   EXPAND_PROFILE,
-  EXPAND_BEHAVE,
   EXPAND_FILETYPE,
   EXPAND_FILES_IN_PATH,
   EXPAND_OWNSYNTAX,
@@ -195,7 +194,6 @@ enum { FOLD_TEXT_LEN = 51, };  //!< buffer size for get_foldtext()
 #define CLEAR_FIELD(field)  memset(&(field), 0, sizeof(field))
 #define CLEAR_POINTER(ptr)  memset((ptr), 0, sizeof(*(ptr)))
 
-// defines to avoid typecasts from (char_u *) to (char *) and back
 // (vim_strchr() is now in strings.c)
 
 #ifndef HAVE_STRNLEN

@@ -39,7 +39,7 @@ int nlua_spell_check(lua_State *lstate)
   const int wo_spell_save = curwin->w_p_spell;
 
   if (!curwin->w_p_spell) {
-    did_set_spelllang(curwin);
+    parse_spelllang(curwin);
     curwin->w_p_spell = true;
   }
 
@@ -51,7 +51,6 @@ int nlua_spell_check(lua_State *lstate)
   }
 
   hlf_T attr = HLF_COUNT;
-  size_t len = 0;
   size_t pos = 0;
   int capcol = -1;
   int no_res = 0;
@@ -61,7 +60,7 @@ int nlua_spell_check(lua_State *lstate)
 
   while (*str != NUL) {
     attr = HLF_COUNT;
-    len = spell_check(curwin, (char *)str, &attr, &capcol, false);
+    size_t len = spell_check(curwin, (char *)str, &attr, &capcol, false);
     assert(len <= INT_MAX);
 
     if (attr != HLF_COUNT) {
@@ -70,10 +69,10 @@ int nlua_spell_check(lua_State *lstate)
       lua_pushlstring(lstate, str, len);
       lua_rawseti(lstate, -2, 1);
 
-      result = attr == HLF_SPB ? "bad"   :
-               attr == HLF_SPR ? "rare"  :
+      result = attr == HLF_SPB ? "bad" :
+               attr == HLF_SPR ? "rare" :
                attr == HLF_SPL ? "local" :
-               attr == HLF_SPC ? "caps"  :
+               attr == HLF_SPC ? "caps" :
                NULL;
 
       assert(result != NULL);

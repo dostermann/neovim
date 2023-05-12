@@ -1,6 +1,3 @@
-if(USE_EXISTING_SRC_DIR)
-  unset(UNIBILIUM_URL)
-endif()
 ExternalProject_Add(unibilium
   URL ${UNIBILIUM_URL}
   URL_HASH SHA256=${UNIBILIUM_SHA256}
@@ -8,5 +5,3 @@ ExternalProject_Add(unibilium
   DOWNLOAD_DIR ${DEPS_DOWNLOAD_DIR}/unibilium
   CMAKE_ARGS ${DEPS_CMAKE_ARGS}
   CMAKE_CACHE_ARGS ${DEPS_CMAKE_CACHE_ARGS})
-
-list(APPEND THIRD_PARTY_DEPS unibilium)

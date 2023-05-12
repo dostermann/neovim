@@ -272,6 +272,7 @@ function tests.text_document_save_did_open()
     end;
     body = function()
       notify('start')
+      expect_notification('textDocument/didClose')
       expect_notification('textDocument/didOpen')
       expect_notification('textDocument/didSave')
       notify('shutdown')
@@ -923,6 +924,23 @@ function tests.basic_formatting()
         return nil, {}
       end)
       notify('shutdown')
+    end;
+  }
+end
+
+function tests.set_defaults_all_capabilities()
+  skeleton {
+    on_init = function(_)
+      return {
+        capabilities = {
+          definitionProvider = true,
+          completionProvider = true,
+          documentRangeFormattingProvider = true,
+        }
+      }
+    end;
+    body = function()
+      notify('test')
     end;
   }
 end

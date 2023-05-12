@@ -28,17 +28,13 @@ int main(void)
 check_type_size("int" SIZEOF_INT LANGUAGE C)
 check_type_size("long" SIZEOF_LONG LANGUAGE C)
 check_type_size("intmax_t" SIZEOF_INTMAX_T LANGUAGE C)
-check_type_size("int32_t" SIZEOF_INT32_T LANGUAGE C)
 check_type_size("size_t" SIZEOF_SIZE_T LANGUAGE C)
-check_type_size("long long" SIZEOF_LONG_LONG LANGUAGE C)
 check_type_size("void *" SIZEOF_VOID_PTR LANGUAGE C)
 
 check_symbol_exists(_NSGetEnviron crt_externs.h HAVE__NSGETENVIRON)
 
 # Headers
 check_include_files(langinfo.h HAVE_LANGINFO_H)
-check_include_files(locale.h HAVE_LOCALE_H)
-check_include_files(pwd.h HAVE_PWD_H)
 check_include_files(strings.h HAVE_STRINGS_H)
 check_include_files(sys/utsname.h HAVE_SYS_UTSNAME_H)
 check_include_files(termios.h HAVE_TERMIOS_H)
@@ -47,15 +43,8 @@ check_include_files(sys/sdt.h HAVE_SYS_SDT_H)
 
 # Functions
 check_function_exists(fseeko HAVE_FSEEKO)
-check_function_exists(getpwent HAVE_GETPWENT)
-check_function_exists(getpwnam HAVE_GETPWNAM)
-check_function_exists(getpwuid HAVE_GETPWUID)
 check_function_exists(readv HAVE_READV)
-check_function_exists(opendir HAVE_OPENDIR)
 check_function_exists(readlink HAVE_READLINK)
-check_function_exists(setpgid HAVE_SETPGID)
-check_function_exists(setsid HAVE_SETSID)
-check_function_exists(sigaction HAVE_SIGACTION)
 check_function_exists(strnlen HAVE_STRNLEN)
 check_function_exists(strcasecmp HAVE_STRCASECMP)
 check_function_exists(strncasecmp HAVE_STRNCASECMP)
@@ -64,22 +53,28 @@ check_function_exists(strptime HAVE_STRPTIME)
 check_c_source_compiles("
 #include <sys/types.h>
 #include <dirent.h>
+#include <sys/file.h>
 int main(void)
 {
   DIR *dir = opendir(\"dirname\");
   dirfd(dir);
-  return 0;
-}
-" HAVE_DIRFD)
-
-check_c_source_compiles("
-#include <sys/file.h>
-int main(void)
-{
   flock(10, LOCK_SH);
   return 0;
 }
-" HAVE_FLOCK)
+" HAVE_DIRFD_AND_FLOCK)
+
+
+check_c_source_compiles("
+#include <pwd.h>
+int main(void)
+{
+  getpwent();
+  getpwuid(0);
+  getpwnam(\"root\");
+  return 0;
+}
+" HAVE_PWD_FUNCS)
+
 
 if(CMAKE_SYSTEM_NAME STREQUAL "SunOS")
   check_c_source_compiles("
@@ -101,11 +96,13 @@ if(HAVE_LANGINFO_H)
 endif()
 
 check_include_files("endian.h" HAVE_ENDIAN_H)
-check_include_files("sys/endian.h" HAVE_SYS_ENDIAN_H)
 
 set(ENDIAN_INCLUDE_FILE "endian.h")
-if(HAVE_SYS_ENDIAN_H AND NOT HAVE_ENDIAN_H)
-  set(ENDIAN_INCLUDE_FILE "sys/endian.h")
+if(NOT HAVE_ENDIAN_H)
+  check_include_files("sys/endian.h" HAVE_SYS_ENDIAN_H)
+  if (HAVE_SYS_ENDIAN_H)
+    set(ENDIAN_INCLUDE_FILE "sys/endian.h")
+  endif()
 endif()
 
 set(SI "#include <stdint.h>\n")
@@ -156,44 +153,15 @@ if (NOT "${HAVE_BE64TOH}")
   endif()
 endif()
 
-# generate configuration header and update include directories
 configure_file (
   "${PROJECT_SOURCE_DIR}/cmake.config/config.h.in"
   "${PROJECT_BINARY_DIR}/cmake.config/auto/config.h"
   )
 
-# TODO(dundargoc): the following is a hack to work around the behavior of
-# file(GENERATE) for multi-config generators, since it doesn't allow different
-# output with the same filename. This should be fixed to be generator
-# independent in the future.
-get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
-if(isMultiConfig)
-  configure_file(versiondef-multi.h.in auto/versiondef.h.gen)
-else()
-  configure_file(versiondef.h.in auto/versiondef.h.gen)
-endif()
+configure_file(versiondef.h.in auto/versiondef.h.gen)
 file(GENERATE
-  OUTPUT "${PROJECT_BINARY_DIR}/cmake.config/auto/versiondef.h"
+  OUTPUT "${PROJECT_BINARY_DIR}/cmake.config/auto/versiondef-$<CONFIG>.h"
   INPUT "${PROJECT_BINARY_DIR}/cmake.config/auto/versiondef.h.gen")
-
-# generate pathdef.c
-find_program(WHOAMI_PROG whoami)
-find_program(HOSTNAME_PROG hostname)
-
-if (DEFINED ENV{USERNAME})
-  set(USERNAME $ENV{USERNAME})
-elseif (NOT DEFINED USERNAME AND EXISTS ${WHOAMI_PROG})
-  execute_process(COMMAND ${WHOAMI_PROG}
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    OUTPUT_VARIABLE USERNAME)
-endif()
-if (DEFINED ENV{HOSTNAME})
-  set(HOSTNAME $ENV{HOSTNAME})
-elseif (EXISTS ${HOSTNAME_PROG})
-  execute_process(COMMAND ${HOSTNAME_PROG}
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    OUTPUT_VARIABLE HOSTNAME)
-endif()
 
 configure_file (
   "${PROJECT_SOURCE_DIR}/cmake.config/pathdef.c.in"

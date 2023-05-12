@@ -77,6 +77,8 @@ local function join_paths(...)
   return (table.concat({ ... }, '/'):gsub('//+', '/'))
 end
 
+---@alias Iterator fun(): string?, string?
+
 --- Return an iterator over the files and directories located in {path}
 ---
 ---@param path (string) An absolute or relative path to the directory to iterate
@@ -100,10 +102,13 @@ function M.dir(path, opts)
   })
 
   if not opts.depth or opts.depth == 1 then
-    return function(fs)
+    local fs = vim.loop.fs_scandir(M.normalize(path))
+    return function()
+      if not fs then
+        return
+      end
       return vim.loop.fs_scandir_next(fs)
-    end,
-      vim.loop.fs_scandir(M.normalize(path))
+    end
   end
 
   --- @async
@@ -144,11 +149,34 @@ end
 --- The search can be narrowed to find only files or only directories by
 --- specifying {type} to be "file" or "directory", respectively.
 ---
----@param names (string|table|fun(name: string): boolean) Names of the files
+--- Examples:
+--- <pre>lua
+--- -- location of Cargo.toml from the current buffer's path
+--- local cargo = vim.fs.find('Cargo.toml', {
+---   upward = true,
+---   stop = vim.loop.os_homedir(),
+---   path = vim.fs.dirname(vim.api.nvim_buf_get_name(0)),
+--- })
+---
+--- -- list all test directories under the runtime directory
+--- local test_dirs = vim.fs.find(
+---   {'test', 'tst', 'testdir'},
+---   {limit = math.huge, type = 'directory', path = './runtime/'}
+--- )
+---
+--- -- get all files ending with .cpp or .hpp inside lib/
+--- local cpp_hpp = vim.fs.find(function(name, path)
+---   return name:match('.*%.[ch]pp$') and path:match('[/\\\\]lib$')
+--- end, {limit = math.huge, type = 'file'})
+--- </pre>
+---
+---@param names (string|table|fun(name: string, path: string): boolean) Names of the files
 ---             and directories to find.
----             Must be base names, paths and globs are not supported.
----             The function is called per file and directory within the
----             traversed directories to test if they match {names}.
+---             Must be base names, paths and globs are not supported when {names} is a string or a table.
+---             If {names} is a function, it is called for each traversed file and directory with args:
+---             - name: base name of the current item
+---             - path: full path of the current item
+---             The function should return `true` if the given file or directory is considered a match.
 ---
 ---@param opts (table) Optional keyword arguments:
 ---                       - path (string): Path to begin searching from. If
@@ -188,7 +216,7 @@ function M.find(names, opts)
 
   ---@private
   local function add(match)
-    matches[#matches + 1] = match
+    matches[#matches + 1] = M.normalize(match)
     if #matches == limit then
       return true
     end
@@ -201,7 +229,7 @@ function M.find(names, opts)
       test = function(p)
         local t = {}
         for name, type in M.dir(p) do
-          if names(name) and (not opts.type or opts.type == type) then
+          if (not opts.type or opts.type == type) and names(name, p) then
             table.insert(t, join_paths(p, name))
           end
         end
@@ -250,7 +278,7 @@ function M.find(names, opts)
       for other, type_ in M.dir(dir) do
         local f = join_paths(dir, other)
         if type(names) == 'function' then
-          if names(other) and (not opts.type or opts.type == type_) then
+          if (not opts.type or opts.type == type_) and names(other, dir) then
             if add(f) then
               return matches
             end
@@ -293,16 +321,32 @@ end
 --- </pre>
 ---
 ---@param path (string) Path to normalize
+---@param opts table|nil Options:
+---             - expand_env: boolean Expand environment variables (default: true)
 ---@return (string) Normalized path
-function M.normalize(path)
-  vim.validate({ path = { path, 's' } })
-  return (
-    path
-      :gsub('^~$', vim.loop.os_homedir())
-      :gsub('^~/', vim.loop.os_homedir() .. '/')
-      :gsub('%$([%w_]+)', vim.loop.os_getenv)
-      :gsub('\\', '/')
-  )
+function M.normalize(path, opts)
+  opts = opts or {}
+
+  vim.validate({
+    path = { path, { 'string' } },
+    expand_env = { opts.expand_env, { 'boolean' }, true },
+  })
+
+  if path:sub(1, 1) == '~' then
+    local home = vim.loop.os_homedir() or '~'
+    if home:sub(-1) == '\\' or home:sub(-1) == '/' then
+      home = home:sub(1, -2)
+    end
+    path = home .. path:sub(2)
+  end
+
+  if opts.expand_env == nil or opts.expand_env then
+    path = path:gsub('%$([%w_]+)', vim.loop.os_getenv)
+  end
+
+  path = path:gsub('\\', '/'):gsub('/+', '/')
+
+  return path:sub(-1) == '/' and path:sub(1, -2) or path
 end
 
 return M

@@ -1307,6 +1307,7 @@ static void shada_read(ShaDaReadDef *const sd_reader, const int flags)
           .mark = cur_entry.data.filemark.mark,
           .fnum = (buf == NULL ? 0 : buf->b_fnum),
           .timestamp = cur_entry.timestamp,
+          .view = INIT_FMARKV,
           .additional_data = cur_entry.data.filemark.additional_data,
         },
       };
@@ -1388,6 +1389,7 @@ static void shada_read(ShaDaReadDef *const sd_reader, const int flags)
         .mark = cur_entry.data.filemark.mark,
         .fnum = 0,
         .timestamp = cur_entry.timestamp,
+        .view = INIT_FMARKV,
         .additional_data = cur_entry.data.filemark.additional_data,
       };
       if (cur_entry.type == kSDItemLocalMark) {
@@ -1491,7 +1493,7 @@ static char *shada_filename(const char *file)
       //     If shell is not performing them then they should be done in main.c
       //     where arguments are parsed, *not here*.
       expand_env((char *)file, &(NameBuff[0]), MAXPATHL);
-      file = (const char *)&(NameBuff[0]);
+      file = &(NameBuff[0]);
     }
   }
   return xstrdup(file);
@@ -1548,9 +1550,9 @@ static ShaDaWriteResult shada_pack_entry(msgpack_packer *const packer, ShadaEntr
         if (!HASHITEM_EMPTY(hi)) { \
           todo--; \
           dictitem_T *const di = TV_DICT_HI2DI(hi); \
-          const size_t key_len = strlen((const char *)hi->hi_key); \
+          const size_t key_len = strlen(hi->hi_key); \
           msgpack_pack_str(spacker, key_len); \
-          msgpack_pack_str_body(spacker, (const char *)hi->hi_key, key_len); \
+          msgpack_pack_str_body(spacker, hi->hi_key, key_len); \
           if (encode_vim_to_msgpack(spacker, &di->di_tv, \
                                     _("additional data of ShaDa " what)) \
               == FAIL) { \
@@ -1639,21 +1641,21 @@ static ShaDaWriteResult shada_pack_entry(msgpack_packer *const packer, ShadaEntr
     break;
   }
   case kSDItemSearchPattern: {
-    const size_t map_size = (size_t)(
-                                     1  // Search pattern is always present
-                                     + ONE_IF_NOT_DEFAULT(entry, search_pattern.magic)
-                                     + ONE_IF_NOT_DEFAULT(entry, search_pattern.is_last_used)
-                                     + ONE_IF_NOT_DEFAULT(entry, search_pattern.smartcase)
-                                     + ONE_IF_NOT_DEFAULT(entry, search_pattern.has_line_offset)
-                                     + ONE_IF_NOT_DEFAULT(entry, search_pattern.place_cursor_at_end)
-                                     + ONE_IF_NOT_DEFAULT(entry,
-                                                          search_pattern.is_substitute_pattern)
-                                     + ONE_IF_NOT_DEFAULT(entry, search_pattern.highlighted)
-                                     + ONE_IF_NOT_DEFAULT(entry, search_pattern.offset)
-                                     + ONE_IF_NOT_DEFAULT(entry, search_pattern.search_backward)
-                                     // finally, additional data:
-                                     + (size_t)(
-                                                entry.data.search_pattern.additional_data
+    const size_t map_size = (
+                             1  // Search pattern is always present
+                             + ONE_IF_NOT_DEFAULT(entry, search_pattern.magic)
+                             + ONE_IF_NOT_DEFAULT(entry, search_pattern.is_last_used)
+                             + ONE_IF_NOT_DEFAULT(entry, search_pattern.smartcase)
+                             + ONE_IF_NOT_DEFAULT(entry, search_pattern.has_line_offset)
+                             + ONE_IF_NOT_DEFAULT(entry, search_pattern.place_cursor_at_end)
+                             + ONE_IF_NOT_DEFAULT(entry,
+                                                  search_pattern.is_substitute_pattern)
+                             + ONE_IF_NOT_DEFAULT(entry, search_pattern.highlighted)
+                             + ONE_IF_NOT_DEFAULT(entry, search_pattern.offset)
+                             + ONE_IF_NOT_DEFAULT(entry, search_pattern.search_backward)
+                             // finally, additional data:
+                             + (
+                                entry.data.search_pattern.additional_data
               ? entry.data.search_pattern.additional_data->dv_hashtab.ht_used
               : 0));
     msgpack_pack_map(spacker, map_size);
@@ -1680,14 +1682,14 @@ static ShaDaWriteResult shada_pack_entry(msgpack_packer *const packer, ShadaEntr
   case kSDItemGlobalMark:
   case kSDItemLocalMark:
   case kSDItemJump: {
-    const size_t map_size = (size_t)(
-                                     1  // File name
-                                     + ONE_IF_NOT_DEFAULT(entry, filemark.mark.lnum)
-                                     + ONE_IF_NOT_DEFAULT(entry, filemark.mark.col)
-                                     + ONE_IF_NOT_DEFAULT(entry, filemark.name)
-                                     // Additional entries, if any:
-                                     + (size_t)(
-                                                entry.data.filemark.additional_data == NULL
+    const size_t map_size = (
+                             1  // File name
+                             + ONE_IF_NOT_DEFAULT(entry, filemark.mark.lnum)
+                             + ONE_IF_NOT_DEFAULT(entry, filemark.mark.col)
+                             + ONE_IF_NOT_DEFAULT(entry, filemark.name)
+                             // Additional entries, if any:
+                             + (
+                                entry.data.filemark.additional_data == NULL
               ? 0
               : entry.data.filemark.additional_data->dv_hashtab.ht_used));
     msgpack_pack_map(spacker, map_size);
@@ -1713,14 +1715,14 @@ static ShaDaWriteResult shada_pack_entry(msgpack_packer *const packer, ShadaEntr
     break;
   }
   case kSDItemRegister: {
-    const size_t map_size = (size_t)(2  // Register contents and name
-                                     + ONE_IF_NOT_DEFAULT(entry, reg.type)
-                                     + ONE_IF_NOT_DEFAULT(entry, reg.width)
-                                     + ONE_IF_NOT_DEFAULT(entry, reg.is_unnamed)
-                                     // Additional entries, if any:
-                                     + (size_t)(entry.data.reg.additional_data == NULL
-                                                ? 0
-                                                : entry.data.reg.additional_data->dv_hashtab.ht_used));
+    const size_t map_size = (2  // Register contents and name
+                             + ONE_IF_NOT_DEFAULT(entry, reg.type)
+                             + ONE_IF_NOT_DEFAULT(entry, reg.width)
+                             + ONE_IF_NOT_DEFAULT(entry, reg.is_unnamed)
+                             // Additional entries, if any:
+                             + (entry.data.reg.additional_data == NULL
+                                ? 0
+                                : entry.data.reg.additional_data->dv_hashtab.ht_used));
     msgpack_pack_map(spacker, map_size);
     PACK_STATIC_STR(REG_KEY_CONTENTS);
     msgpack_pack_array(spacker, entry.data.reg.contents_size);
@@ -1751,16 +1753,16 @@ static ShaDaWriteResult shada_pack_entry(msgpack_packer *const packer, ShadaEntr
   case kSDItemBufferList:
     msgpack_pack_array(spacker, entry.data.buffer_list.size);
     for (size_t i = 0; i < entry.data.buffer_list.size; i++) {
-      const size_t map_size = (size_t)(
-                                       1  // Buffer name
-                                       + (size_t)(entry.data.buffer_list.buffers[i].pos.lnum
-                                                  != default_pos.lnum)
-                                       + (size_t)(entry.data.buffer_list.buffers[i].pos.col
-                                                  != default_pos.col)
-                                       // Additional entries, if any:
-                                       + (size_t)(
-                                                  entry.data.buffer_list.buffers[i].additional_data
-                                                  == NULL
+      const size_t map_size = (
+                               1  // Buffer name
+                               + (size_t)(entry.data.buffer_list.buffers[i].pos.lnum
+                                          != default_pos.lnum)
+                               + (size_t)(entry.data.buffer_list.buffers[i].pos.col
+                                          != default_pos.col)
+                               // Additional entries, if any:
+                               + (
+                                  entry.data.buffer_list.buffers[i].additional_data
+                                  == NULL
                 ? 0
                 : (entry.data.buffer_list.buffers[i].additional_data
                    ->dv_hashtab.ht_used)));
@@ -2208,7 +2210,7 @@ static inline ShaDaWriteResult shada_read_when_writing(ShaDaReadDef *const sd_re
         shada_free_shada_entry(&entry);
         break;
       }
-      const char *const fname = (const char *)entry.data.filemark.fname;
+      const char *const fname = entry.data.filemark.fname;
       khiter_t k;
       int kh_ret;
       k = kh_put(file_marks, &wms->file_marks, fname, &kh_ret);
@@ -2579,7 +2581,7 @@ static ShaDaWriteResult shada_write(ShaDaWriteDef *const sd_writer, ShaDaReadDef
           { STATIC_CSTR_AS_STRING("pid"),
             INTEGER_OBJ((Integer)os_get_pid()) },
           { STATIC_CSTR_AS_STRING("encoding"),
-            STRING_OBJ(cstr_as_string((char *)p_enc)) },
+            STRING_OBJ(cstr_as_string(p_enc)) },
         }),
       }
     }
@@ -2714,17 +2716,17 @@ static ShaDaWriteResult shada_write(ShaDaWriteDef *const sd_writer, ShaDaReadDef
       const char *fname;
       if (fm.fmark.fnum == 0) {
         assert(fm.fname != NULL);
-        if (shada_removable((const char *)fm.fname)) {
+        if (shada_removable(fm.fname)) {
           continue;
         }
-        fname = (const char *)fm.fname;
+        fname = fm.fname;
       } else {
         const buf_T *const buf = buflist_findnr(fm.fmark.fnum);
         if (buf == NULL || buf->b_ffname == NULL
             || in_bufset(&removable_bufs, buf)) {
           continue;
         }
-        fname = (const char *)buf->b_ffname;
+        fname = buf->b_ffname;
       }
       const PossiblyFreedShadaEntry pf_entry = {
         .can_free_entry = false,
@@ -2761,7 +2763,7 @@ static ShaDaWriteResult shada_write(ShaDaWriteDef *const sd_writer, ShaDaReadDef
         continue;
       }
       const void *local_marks_iter = NULL;
-      const char *const fname = (const char *)buf->b_ffname;
+      const char *const fname = buf->b_ffname;
       khiter_t k;
       int kh_ret;
       k = kh_put(file_marks, &wms->file_marks, fname, &kh_ret);
@@ -3040,7 +3042,7 @@ shada_write_file_nomerge: {}
       if (!os_isdir(fname)) {
         int ret;
         char *failed_dir;
-        if ((ret = os_mkdir_recurse(fname, 0700, &failed_dir)) != 0) {
+        if ((ret = os_mkdir_recurse(fname, 0700, &failed_dir, NULL)) != 0) {
           semsg(_(SERR "Failed to create directory %s "
                   "for writing ShaDa file: %s"),
                 failed_dir, os_strerror(ret));
@@ -3166,8 +3168,8 @@ int shada_read_everything(const char *const fname, const bool forceit, const boo
 {
   return shada_read_file(fname,
                          kShaDaWantInfo|kShaDaWantMarks|kShaDaGetOldfiles
-                         |(forceit?kShaDaForceit:0)
-                         |(missing_ok?0:kShaDaMissingError));
+                         |(forceit ? kShaDaForceit : 0)
+                         |(missing_ok ? 0 : kShaDaMissingError));
 }
 
 static void shada_free_shada_entry(ShadaEntry *const entry)
@@ -3602,7 +3604,6 @@ shada_read_next_item_start:
     ret = spm_ret;
     goto shada_read_next_item_error;
   }
-  ret = kSDReadStatusMalformed;
   entry->data = sd_default_values[type_u64].data;
   switch ((ShadaEntryType)type_u64) {
   case kSDItemHeader:
@@ -4010,7 +4011,7 @@ static bool shada_removable(const char *name)
   char part[MAXPATHL + 1];
   bool retval = false;
 
-  char *new_name = home_replace_save(NULL, (char *)name);
+  char *new_name = home_replace_save(NULL, name);
   for (p = p_shada; *p;) {
     (void)copy_option_part(&p, part, ARRAY_SIZE(part), ", ");
     if (part[0] == 'r') {

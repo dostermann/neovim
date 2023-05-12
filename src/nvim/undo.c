@@ -96,6 +96,7 @@
 #include "nvim/eval/typval.h"
 #include "nvim/eval/typval_defs.h"
 #include "nvim/ex_cmds_defs.h"
+#include "nvim/ex_docmd.h"
 #include "nvim/ex_getln.h"
 #include "nvim/extmark.h"
 #include "nvim/fileio.h"
@@ -118,7 +119,6 @@
 #include "nvim/os/time.h"
 #include "nvim/path.h"
 #include "nvim/pos.h"
-#include "nvim/screen.h"
 #include "nvim/sha256.h"
 #include "nvim/state.h"
 #include "nvim/strings.h"
@@ -136,6 +136,13 @@ typedef struct {
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "undo.c.generated.h"
 #endif
+
+static const char e_undo_list_corrupt[]
+  = N_("E439: Undo list corrupt");
+static const char e_undo_line_missing[]
+  = N_("E440: Undo line missing");
+static const char e_write_error_in_undo_file_str[]
+  = N_("E829: Write error in undo file: %s");
 
 // used in undo_end() to report number of added and deleted lines
 static long u_newcount, u_oldcount;
@@ -301,7 +308,7 @@ bool undo_allowed(buf_T *buf)
 
   // Don't allow changes in the buffer while editing the cmdline.  The
   // caller of getcmdline() may get confused.
-  if (textlock != 0) {
+  if (textlock != 0 || expr_map_locked()) {
     emsg(_(e_textlock));
     return false;
   }
@@ -624,7 +631,7 @@ int u_savecommon(buf_T *buf, linenr_T top, linenr_T bot, linenr_T newbot, int re
 // extra fields for uhp
 #define UHP_SAVE_NR            1
 
-static char e_not_open[] = N_("E828: Cannot open undo file for writing: %s");
+static const char e_not_open[] = N_("E828: Cannot open undo file for writing: %s");
 
 /// Compute the hash for a buffer text into hash[UNDO_HASH_SIZE].
 ///
@@ -705,7 +712,7 @@ char *u_get_undo_file_name(const char *const buf_ffname, const bool reading)
         // Last directory in the list does not exist, create it.
         int ret;
         char *failed_dir;
-        if ((ret = os_mkdir_recurse(dir_name, 0755, &failed_dir)) != 0) {
+        if ((ret = os_mkdir_recurse(dir_name, 0755, &failed_dir, NULL)) != 0) {
           semsg(_("E5003: Unable to create directory \"%s\" for undo file: %s"),
                 failed_dir, os_strerror(ret));
           xfree(failed_dir);
@@ -904,7 +911,7 @@ static u_header_T *unserialize_uhp(bufinfo_T *bi, const char *file_name)
   uhp->uh_time = undo_read_time(bi);
 
   // Unserialize optional fields.
-  for (;;) {
+  while (true) {
     int len = undo_read_byte(bi);
 
     if (len == EOF) {
@@ -1179,7 +1186,7 @@ void u_write_undo(const char *const name, const bool forceit, buf_T *const buf, 
   // allow the user to access the undo file.
   int perm = 0600;
   if (buf->b_ffname != NULL) {
-    perm = os_getperm((const char *)buf->b_ffname);
+    perm = os_getperm(buf->b_ffname);
     if (perm < 0) {
       perm = 0600;
     }
@@ -1333,20 +1340,22 @@ void u_write_undo(const char *const name, const bool forceit, buf_T *const buf, 
   }
 #endif
 
+  if (p_fs && fflush(fp) == 0 && os_fsync(fd) != 0) {
+    write_ok = false;
+  }
+
 write_error:
   fclose(fp);
   if (!write_ok) {
-    semsg(_("E829: write error in undo file: %s"), file_name);
+    semsg(_(e_write_error_in_undo_file_str), file_name);
   }
 
-#ifdef HAVE_ACL
   if (buf->b_ffname != NULL) {
     // For systems that support ACL: get the ACL from the original file.
     vim_acl_T acl = os_get_acl(buf->b_ffname);
     os_set_acl(file_name, acl);
     os_free_acl(acl);
   }
-#endif
 
 theend:
   if (file_name != name) {
@@ -1473,7 +1482,7 @@ void u_read_undo(char *name, const uint8_t *hash, const char *orig_name FUNC_ATT
 
   // Optional header fields.
   long last_save_nr = 0;
-  for (;;) {
+  while (true) {
     int len = undo_read_byte(&bi);
 
     if (len == 0 || len == EOF) {
@@ -2026,7 +2035,7 @@ void undo_time(long step, bool sec, bool file, bool absolute)
 
     while (uhp != NULL) {
       uhp->uh_walk = mark;
-      long val = dosec  ? (long)(uhp->uh_time) :
+      long val = dosec ? (long)(uhp->uh_time) :
                  dofile ? uhp->uh_save_nr
                         : uhp->uh_seq;
 
@@ -2807,7 +2816,7 @@ static void u_unch_branch(u_header_T *uhp)
 static u_entry_T *u_get_headentry(buf_T *buf)
 {
   if (buf->b_u_newhead == NULL || buf->b_u_newhead->uh_entry == NULL) {
-    iemsg(_("E439: undo list corrupt"));
+    iemsg(_(e_undo_list_corrupt));
     return NULL;
   }
   return buf->b_u_newhead->uh_entry;
@@ -2830,7 +2839,7 @@ static void u_getbot(buf_T *buf)
     linenr_T extra = buf->b_ml.ml_line_count - uep->ue_lcount;
     uep->ue_bot = uep->ue_top + (linenr_T)uep->ue_size + 1 + extra;
     if (uep->ue_bot < 1 || uep->ue_bot > buf->b_ml.ml_line_count) {
-      iemsg(_("E440: undo line missing"));
+      iemsg(_(e_undo_line_missing));
       uep->ue_bot = uep->ue_top + 1;        // assume all lines deleted, will
                                             // get all the old lines back
                                             // without deleting the current

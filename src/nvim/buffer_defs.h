@@ -192,6 +192,8 @@ typedef struct {
 #define w_p_rlc w_onebuf_opt.wo_rlc    // 'rightleftcmd'
   long wo_scr;
 #define w_p_scr w_onebuf_opt.wo_scr     // 'scroll'
+  int wo_sms;
+#define w_p_sms w_onebuf_opt.wo_sms     // 'smoothscroll'
   int wo_spell;
 #define w_p_spell w_onebuf_opt.wo_spell  // 'spell'
   int wo_cuc;
@@ -335,36 +337,6 @@ struct mapblock {
   sctx_T m_script_ctx;          // SCTX where map was defined
   char *m_desc;                 // description of mapping
   bool m_replace_keycodes;      // replace keycodes in result of expression
-};
-
-/// Used for highlighting in the status line.
-typedef struct stl_hlrec stl_hlrec_t;
-struct stl_hlrec {
-  char *start;
-  int userhl;                   // 0: no HL, 1-9: User HL, < 0 for syn ID
-};
-
-/// Used for building the status line.
-typedef struct stl_item stl_item_t;
-struct stl_item {
-  // Where the item starts in the status line output buffer
-  char *start;
-  // Function to run for ClickFunc items.
-  char *cmd;
-  // The minimum width of the item
-  int minwid;
-  // The maximum width of the item
-  int maxwid;
-  enum {
-    Normal,
-    Empty,
-    Group,
-    Separate,
-    Highlight,
-    TabPage,
-    ClickFunc,
-    Trunc,
-  } type;
 };
 
 // values for b_syn_spell: what to do with toplevel text
@@ -637,7 +609,7 @@ struct file_buffer {
   int b_p_ai;                   ///< 'autoindent'
   int b_p_ai_nopaste;           ///< b_p_ai saved for paste mode
   char *b_p_bkc;                ///< 'backupco
-  unsigned int b_bkc_flags;     ///< flags for 'backupco
+  unsigned b_bkc_flags;     ///< flags for 'backupco
   int b_p_ci;                   ///< 'copyindent'
   int b_p_bin;                  ///< 'binary'
   int b_p_bomb;                 ///< 'bomb'
@@ -838,6 +810,7 @@ struct file_buffer {
   Map(uint32_t, uint32_t) b_extmark_ns[1];         // extmark namespaces
   size_t b_virt_line_blocks;    // number of virt_line blocks
   size_t b_signs;               // number of sign extmarks
+  size_t b_signs_with_text;     // number of sign extmarks with text
 
   // array of channel_id:s which have asked to receive updates for this
   // buffer.
@@ -1111,20 +1084,23 @@ struct window_S {
   win_T *w_prev;              ///< link to previous window
   win_T *w_next;              ///< link to next window
   bool w_closing;                   ///< window is being closed, don't let
-                                    ///  autocommands close it too.
+                                    ///< autocommands close it too.
 
   frame_T *w_frame;             ///< frame containing this window
 
   pos_T w_cursor;                   ///< cursor position in buffer
 
   colnr_T w_curswant;               ///< Column we want to be at.  This is
-                                    ///  used to try to stay in the same column
-                                    ///  for up/down cursor motions.
+                                    ///< used to try to stay in the same column
+                                    ///< for up/down cursor motions.
 
   int w_set_curswant;               // If set, then update w_curswant the next
                                     // time through cursupdate() to the
                                     // current virtual column
 
+  linenr_T w_cursorline;            ///< Where 'cursorline' should be drawn,
+                                    ///< can be different from w_cursor.lnum
+                                    ///< for closed folds.
   linenr_T w_last_cursorline;       ///< where last 'cursorline' was drawn
   pos_T w_last_cursormoved;         ///< for CursorMoved event
 
@@ -1189,11 +1165,12 @@ struct window_S {
   bool w_botfill;                   // true when filler lines are actually
                                     // below w_topline (at end of file)
   bool w_old_botfill;               // w_botfill at last redraw
-  colnr_T w_leftcol;                // window column number of the left most
+  colnr_T w_leftcol;                // screen column number of the left most
                                     // character in the window; used when
                                     // 'wrap' is off
-  colnr_T w_skipcol;                // starting column when a single line
-                                    // doesn't fit in the window
+  colnr_T w_skipcol;                // starting screen column for the first
+                                    // line in the window; used when 'wrap' is
+                                    // on; does not include win_col_off()
 
   // six fields that are only used when there is a WinScrolled autocommand
   linenr_T w_last_topline;          ///< last known value for w_topline
@@ -1246,8 +1223,10 @@ struct window_S {
   int w_valid;
   pos_T w_valid_cursor;             // last known position of w_cursor, used to adjust w_valid
   colnr_T w_valid_leftcol;          // last known w_leftcol
+  colnr_T w_valid_skipcol;          // last known w_skipcol
 
   bool w_viewport_invalid;
+  linenr_T w_viewport_last_topline;  // topline when the viewport was last updated
 
   // w_cline_height is the number of physical lines taken by the buffer line
   // that the cursor is on.  We use this to avoid extra calls to plines_win().
@@ -1305,13 +1284,15 @@ struct window_S {
   bool w_redr_border;               // if true border must be redrawn
   bool w_redr_statuscol;            // if true 'statuscolumn' must be redrawn
 
-  // remember what is shown in the ruler for this window (if 'ruler' set)
-  pos_T w_ru_cursor;                // cursor position shown in ruler
-  colnr_T w_ru_virtcol;             // virtcol shown in ruler
-  linenr_T w_ru_topline;            // topline shown in ruler
-  linenr_T w_ru_line_count;         // line count used for ruler
-  int w_ru_topfill;                 // topfill shown in ruler
-  char w_ru_empty;                  // true if ruler shows 0-1 (empty line)
+  // remember what is shown in the 'statusline'-format elements
+  pos_T w_stl_cursor;                // cursor position when last redrawn
+  colnr_T w_stl_virtcol;             // virtcol when last redrawn
+  linenr_T w_stl_topline;            // topline when last redrawn
+  linenr_T w_stl_line_count;         // line count when last redrawn
+  int w_stl_topfill;                 // topfill when last redrawn
+  char w_stl_empty;                  // true if elements show 0-1 (empty line)
+  int w_stl_state;                   // State when last redrawn
+  int w_stl_recording;               // reg_recording when last redrawn
 
   int w_alt_fnum;                   // alternate file (for # and CTRL-^)
 
@@ -1414,26 +1395,6 @@ struct window_S {
   StlClickDefinition *w_statuscol_click_defs;
   // Size of the w_statuscol_click_defs array
   size_t w_statuscol_click_defs_size;
-};
-
-/// Struct to hold info for 'statuscolumn'
-typedef struct statuscol statuscol_T;
-
-struct statuscol {
-  int width;                           ///< width of the status column
-  int cur_attr;                        ///< current attributes in text
-  int num_attr;                        ///< attributes used for line number
-  int fold_attr;                       ///< attributes used for fold column
-  int sign_attr[SIGN_SHOW_MAX + 1];    ///< attributes used for signs
-  int truncate;                        ///< truncated width
-  bool draw;                           ///< draw statuscolumn or not
-  char fold_text[9 * 4 + 1];           ///< text in fold column (%C)
-  char *sign_text[SIGN_SHOW_MAX + 1];  ///< text in sign column (%s)
-  char text[MAXPATHL];                 ///< text in status column
-  char *textp;                         ///< current position in text
-  char *text_end;                      ///< end of text (the NUL byte)
-  stl_hlrec_t *hlrec;                  ///< highlight groups
-  stl_hlrec_t *hlrecp;                 ///< current highlight group
 };
 
 /// Macros defined in Vim, but not in Neovim

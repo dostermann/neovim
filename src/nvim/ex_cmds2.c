@@ -15,6 +15,7 @@
 #include "nvim/ascii.h"
 #include "nvim/autocmd.h"
 #include "nvim/buffer.h"
+#include "nvim/bufwrite.h"
 #include "nvim/change.h"
 #include "nvim/channel.h"
 #include "nvim/eval.h"
@@ -38,6 +39,7 @@
 #include "nvim/move.h"
 #include "nvim/normal.h"
 #include "nvim/option.h"
+#include "nvim/optionstr.h"
 #include "nvim/os/os_defs.h"
 #include "nvim/path.h"
 #include "nvim/pos.h"
@@ -50,6 +52,9 @@
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "ex_cmds2.c.generated.h"
 #endif
+
+static const char e_compiler_not_supported_str[]
+  = N_("E666: Compiler not supported: %s");
 
 void ex_ruby(exarg_T *eap)
 {
@@ -201,7 +206,7 @@ void dialog_changed(buf_T *buf, bool checkall)
     .forceit = false,
   };
 
-  dialog_msg((char *)buff, _("Save changes to \"%s\"?"), buf->b_fname);
+  dialog_msg(buff, _("Save changes to \"%s\"?"), buf->b_fname);
   if (checkall) {
     ret = vim_dialog_yesnoallcancel(VIM_QUESTION, NULL, buff, 1);
   } else {
@@ -446,12 +451,9 @@ int buf_write_all(buf_T *buf, int forceit)
 /// ":argdo", ":windo", ":bufdo", ":tabdo", ":cdo", ":ldo", ":cfdo" and ":lfdo"
 void ex_listdo(exarg_T *eap)
 {
-  int i;
   win_T *wp;
   tabpage_T *tp;
-  int next_fnum = 0;
   char *save_ei = NULL;
-  char *p_shm_save;
 
   if (eap->cmdidx != CMD_windo && eap->cmdidx != CMD_tabdo) {
     // Don't do syntax HL autocommands.  Skipping the syntax file is a
@@ -469,7 +471,8 @@ void ex_listdo(exarg_T *eap)
       || !check_changed(curbuf, CCGD_AW
                         | (eap->forceit ? CCGD_FORCEIT : 0)
                         | CCGD_EXCMD)) {
-    i = 0;
+    int next_fnum = 0;
+    int i = 0;
     // start at the eap->line1 argument/window/buffer
     wp = firstwin;
     tp = first_tabpage;
@@ -515,7 +518,9 @@ void ex_listdo(exarg_T *eap)
       if (qf_size == 0 || (size_t)eap->line1 > qf_size) {
         buf = NULL;
       } else {
+        save_clear_shm_value();
         ex_cc(eap);
+        restore_shm_value();
 
         buf = curbuf;
         i = (int)eap->line1 - 1;
@@ -542,11 +547,9 @@ void ex_listdo(exarg_T *eap)
         if (curwin->w_arg_idx != i || !editing_arg_idx(curwin)) {
           // Clear 'shm' to avoid that the file message overwrites
           // any output from the command.
-          p_shm_save = xstrdup(p_shm);
-          set_option_value_give_err("shm", 0L, "", 0);
+          save_clear_shm_value();
           do_argfile(eap, i);
-          set_option_value_give_err("shm", 0L, p_shm_save, 0);
-          xfree(p_shm_save);
+          restore_shm_value();
         }
         if (curwin->w_arg_idx != i) {
           break;
@@ -611,11 +614,9 @@ void ex_listdo(exarg_T *eap)
 
         // Go to the next buffer.  Clear 'shm' to avoid that the file
         // message overwrites any output from the command.
-        p_shm_save = xstrdup(p_shm);
-        set_option_value_give_err("shm", 0L, "", 0);
+        save_clear_shm_value();
         goto_buffer(eap, DOBUF_FIRST, FORWARD, next_fnum);
-        set_option_value_give_err("shm", 0L, p_shm_save, 0);
-        xfree(p_shm_save);
+        restore_shm_value();
 
         // If autocommands took us elsewhere, quit here.
         if (curbuf->b_fnum != next_fnum) {
@@ -634,11 +635,9 @@ void ex_listdo(exarg_T *eap)
 
         // Clear 'shm' to avoid that the file message overwrites
         // any output from the command.
-        p_shm_save = xstrdup(p_shm);
-        set_option_value_give_err("shm", 0L, "", 0);
+        save_clear_shm_value();
         ex_cnext(eap);
-        set_option_value_give_err("shm", 0L, p_shm_save, 0);
-        xfree(p_shm_save);
+        restore_shm_value();
 
         // If jumping to the next quickfix entry fails, quit here.
         if (qf_get_cur_idx(eap) == qf_idx) {
@@ -735,7 +734,7 @@ void ex_compiler(exarg_T *eap)
     // Try lua compiler
     snprintf(buf, bufsize, "compiler/%s.lua", eap->arg);
     if (source_runtime(buf, DIP_ALL) == FAIL) {
-      semsg(_("E666: compiler not supported: %s"), eap->arg);
+      semsg(_(e_compiler_not_supported_str), eap->arg);
     }
   }
   xfree(buf);
@@ -762,14 +761,13 @@ void ex_compiler(exarg_T *eap)
 /// ":checktime [buffer]"
 void ex_checktime(exarg_T *eap)
 {
-  buf_T *buf;
   int save_no_check_timestamps = no_check_timestamps;
 
   no_check_timestamps = 0;
   if (eap->addr_count == 0) {    // default is all buffers
     check_timestamps(false);
   } else {
-    buf = buflist_findnr((int)eap->line2);
+    buf_T *buf = buflist_findnr((int)eap->line2);
     if (buf != NULL) {           // cannot happen?
       (void)buf_check_timestamp(buf);
     }
@@ -816,7 +814,7 @@ static void script_host_do_range(char *name, exarg_T *eap)
     list_T *args = tv_list_alloc(3);
     tv_list_append_number(args, (int)eap->line1);
     tv_list_append_number(args, (int)eap->line2);
-    tv_list_append_string(args, (const char *)eap->arg, -1);
+    tv_list_append_string(args, eap->arg, -1);
     (void)eval_call_provider(name, "do_range", args, true);
   }
 }

@@ -10,15 +10,19 @@ local async_meths = helpers.async_meths
 local test_build_dir = helpers.test_build_dir
 local nvim_prog = helpers.nvim_prog
 local exec = helpers.exec
+local exec_capture = helpers.exec_capture
 local exc_exec = helpers.exc_exec
 local exec_lua = helpers.exec_lua
 local poke_eventloop = helpers.poke_eventloop
 local assert_alive = helpers.assert_alive
 local is_os = helpers.is_os
 local is_ci = helpers.is_ci
+local funcs = helpers.funcs
+local skip = helpers.skip
 
 describe('ui/ext_messages', function()
   local screen
+  local fname = 'Xtest_functional_ui_messages_spec'
 
   before_each(function()
     clear()
@@ -38,7 +42,7 @@ describe('ui/ext_messages', function()
     })
   end)
   after_each(function()
-    os.remove('Xtest')
+    os.remove(fname)
   end)
 
   it('msg_clear follows msg_show kind of confirm', function()
@@ -123,7 +127,7 @@ describe('ui/ext_messages', function()
     feed('nq')
 
     -- kind=wmsg (editing readonly file)
-    command('write Xtest')
+    command('write ' .. fname)
     command('set readonly nohls')
     feed('G$x')
     screen:expect{grid=[[
@@ -474,8 +478,7 @@ describe('ui/ext_messages', function()
     ]], msg_history={{
       content = {{ "stuff" }},
       kind = "echomsg",
-    }}, showmode={{ "-- INSERT --", 3 }},
-      messages={{
+    }}, messages={{
         content = {{ "Press ENTER or type command to continue", 4}},
         kind = "return_prompt"
     }}}
@@ -910,9 +913,9 @@ stack traceback:
   end)
 
   it('does not truncate messages', function()
-    command('write Xtest')
+    command('write '.. fname)
     screen:expect({messages={
-      {content = { { '"Xtest" [New] 0L, 0B written' } }, kind = "" }
+      {content = { { string.format('"%s" [New] 0L, 0B written', fname) } }, kind = "" }
     }})
   end)
 end)
@@ -985,7 +988,7 @@ describe('ui/builtin messages', function()
 
     -- screen size doesn't affect internal output #10285
     eq('ErrorMsg       xxx ctermfg=15 ctermbg=1 guifg=White guibg=Red',
-       meths.exec("hi ErrorMsg", true))
+       exec_capture("hi ErrorMsg"))
   end)
 
   it(':syntax list langGroup output', function()
@@ -1024,7 +1027,7 @@ vimComment     xxx match /\s"[^\-:.%#=*].*$/ms=s+1,lc=1  excludenl contains=@vim
                    match /\<endif\s\+".*$/ms=s+5,lc=5  contains=@vimCommentGroup,vimCommentString 
                    match /\<else\s\+".*$/ms=s+4,lc=4  contains=@vimCommentGroup,vimCommentString 
                    links to Comment]],
-       meths.exec('syntax list vimComment', true))
+       exec_capture('syntax list vimComment'))
     -- luacheck: pop
   end)
 
@@ -1322,7 +1325,7 @@ describe('ui/ext_messages', function()
       {1:~                }type  :q{5:<Enter>}               to exit         {1:                 }|
       {1:~                }type  :help{5:<Enter>}            for help        {1:                 }|
       {1:~                                                                               }|
-      {1:~                }type  :help news{5:<Enter>} to see changes in v{MATCH:%d+%.%d+}|
+      {1:~{MATCH: +}}type  :help news{5:<Enter>} to see changes in v{MATCH:%d+%.%d+}{1:{MATCH: +}}|
       {1:~                                                                               }|
       {MATCH:.*}|
       {MATCH:.*}|
@@ -1378,7 +1381,7 @@ describe('ui/ext_messages', function()
                        type  :q{5:<Enter>}               to exit                          |
                        type  :help{5:<Enter>}            for help                         |
                                                                                       |
-                       type  :help news{5:<Enter>} to see changes in v{MATCH:%d+%.%d+}|
+      {MATCH: +}type  :help news{5:<Enter>} to see changes in v{MATCH:%d+%.%d+ +}|
                                                                                       |
       {MATCH:.*}|
       {MATCH:.*}|
@@ -1917,6 +1920,7 @@ aliquip ex ea commodo consequat.]])
   end)
 
   it('with :!cmd does not crash on resize', function()
+    skip(funcs.executable('sleep') == 0, 'missing "sleep" command')
     feed(':!sleep 1<cr>')
     screen:expect{grid=[[
                                          |

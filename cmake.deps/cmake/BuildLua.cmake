@@ -1,6 +1,6 @@
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
   set(LUA_TARGET linux)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+elseif(APPLE)
   set(LUA_TARGET macosx)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "FreeBSD")
   set(LUA_TARGET freebsd)
@@ -19,7 +19,7 @@ endif()
 set(LUA_CFLAGS "-O0 -g3 -fPIC")
 set(LUA_LDFLAGS "")
 
-if(CLANG_ASAN_UBSAN)
+if(ENABLE_ASAN_UBSAN)
   set(LUA_CFLAGS "${LUA_CFLAGS} -fsanitize=address")
   set(LUA_CFLAGS "${LUA_CFLAGS} -fno-omit-frame-pointer")
   set(LUA_CFLAGS "${LUA_CFLAGS} -fno-optimize-sibling-calls")
@@ -42,9 +42,6 @@ set(LUA_INSTALL_TOP_ARG "INSTALL_TOP=${DEPS_INSTALL_DIR}")
 
 message(STATUS "Lua target is ${LUA_TARGET}")
 
-if(USE_EXISTING_SRC_DIR)
-  unset(LUA_URL)
-endif()
 ExternalProject_Add(lua
   URL ${LUA_URL}
   URL_HASH SHA256=${LUA_SHA256}
@@ -55,15 +52,11 @@ ExternalProject_Add(lua
   BUILD_COMMAND ${MAKE_PRG} ${LUA_INSTALL_TOP_ARG} ${LUA_TARGET}
   INSTALL_COMMAND ${MAKE_PRG} ${LUA_INSTALL_TOP_ARG} install)
 
-list(APPEND THIRD_PARTY_DEPS lua)
-
-set(BUSTED ${DEPS_INSTALL_DIR}/bin/busted)
+set(BUSTED ${DEPS_BIN_DIR}/busted)
 set(BUSTED_LUA ${BUSTED}-lua)
 
 add_custom_command(OUTPUT ${BUSTED_LUA}
   COMMAND sed -e 's/^exec/exec $$LUA_DEBUGGER/' -e 's/jit//g' < ${BUSTED} > ${BUSTED_LUA} && chmod +x ${BUSTED_LUA}
   DEPENDS lua busted ${BUSTED})
-add_custom_target(busted-lua
-  DEPENDS ${DEPS_INSTALL_DIR}/bin/busted-lua)
-
-list(APPEND THIRD_PARTY_DEPS busted-lua)
+add_custom_target(busted-lua ALL
+  DEPENDS ${DEPS_BIN_DIR}/busted-lua)

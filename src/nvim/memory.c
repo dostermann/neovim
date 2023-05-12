@@ -121,9 +121,7 @@ void *xmalloc(size_t size)
 {
   void *ret = try_malloc(size);
   if (!ret) {
-    os_errmsg(e_outofmem);
-    os_errmsg("\n");
-    preserve_exit();
+    preserve_exit(e_outofmem);
   }
   return ret;
 }
@@ -152,9 +150,7 @@ void *xcalloc(size_t count, size_t size)
     try_to_free_memory();
     ret = calloc(allocated_count, allocated_size);
     if (!ret) {
-      os_errmsg(e_outofmem);
-      os_errmsg("\n");
-      preserve_exit();
+      preserve_exit(e_outofmem);
     }
   }
   return ret;
@@ -174,9 +170,7 @@ void *xrealloc(void *ptr, size_t size)
     try_to_free_memory();
     ret = realloc(ptr, allocated_size);
     if (!ret) {
-      os_errmsg(e_outofmem);
-      os_errmsg("\n");
-      preserve_exit();
+      preserve_exit(e_outofmem);
     }
   }
   return ret;
@@ -194,8 +188,7 @@ void *xmallocz(size_t size)
 {
   size_t total_size = size + 1;
   if (total_size < size) {
-    os_errmsg(_("Vim: Data too large to fit into virtual memory space\n"));
-    preserve_exit();
+    preserve_exit(_("Vim: Data too large to fit into virtual memory space\n"));
   }
 
   void *ret = xmalloc(total_size);
@@ -762,11 +755,7 @@ void free_all_mem(void)
   p_hi = 0;
   init_history();
 
-  qf_free_all(NULL);
-  // Free all location lists
-  FOR_ALL_TAB_WINDOWS(tab, win) {
-    qf_free_all(win);
-  }
+  free_quickfix();
 
   // Close all script inputs.
   close_all_scripts();
@@ -793,7 +782,7 @@ void free_all_mem(void)
   first_tabpage = NULL;
 
   // message history
-  for (;;) {
+  while (true) {
     if (delete_first_msg() == FAIL) {
       break;
     }

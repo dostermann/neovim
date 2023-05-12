@@ -79,8 +79,8 @@
 #include "nvim/os/time.h"
 #include "nvim/path.h"
 #include "nvim/pos.h"
-#include "nvim/screen.h"
 #include "nvim/spell.h"
+#include "nvim/statusline.h"
 #include "nvim/strings.h"
 #include "nvim/types.h"
 #include "nvim/ui.h"
@@ -120,6 +120,10 @@ struct pointer_block {
   PTR_EN pb_pointer[];          // list of pointers to blocks
                                 // followed by empty space until end of page
 };
+
+// Value for pb_count_max.
+#define PB_COUNT_MAX(mfp) \
+  (uint16_t)((mfp->mf_page_size - offsetof(PTR_BL, pb_pointer)) / sizeof(PTR_EN))
 
 // A data block is a leaf in the tree.
 //
@@ -179,19 +183,19 @@ enum {
 // different machines. b0_magic_* is used to check the byte order and size of
 // variables, because the rest of the swap file is not portable.
 struct block0 {
-  char_u b0_id[2];                   ///< ID for block 0: BLOCK0_ID0 and BLOCK0_ID1.
+  char b0_id[2];                     ///< ID for block 0: BLOCK0_ID0 and BLOCK0_ID1.
   char b0_version[10];               // Vim version string
-  char_u b0_page_size[4];            // number of bytes per page
-  char_u b0_mtime[4];                // last modification time of file
-  char_u b0_ino[4];                  // inode of b0_fname
-  char_u b0_pid[4];                  // process id of creator (or 0)
-  char_u b0_uname[B0_UNAME_SIZE];    // name of user (uid if no name)
-  char_u b0_hname[B0_HNAME_SIZE];    // host name (if it has a name)
+  char b0_page_size[4];              // number of bytes per page
+  char b0_mtime[4];                  // last modification time of file
+  char b0_ino[4];                    // inode of b0_fname
+  char b0_pid[4];                    // process id of creator (or 0)
+  char b0_uname[B0_UNAME_SIZE];      // name of user (uid if no name)
+  char b0_hname[B0_HNAME_SIZE];      // host name (if it has a name)
   char b0_fname[B0_FNAME_SIZE_ORG];  // name of file being edited
   long b0_magic_long;                // check for byte order of long
   int b0_magic_int;                  // check for byte order of int
   int16_t b0_magic_short;            // check for byte order of short
-  char_u b0_magic_char;              // check for last char
+  char b0_magic_char;                // check for last char
 };
 
 // Note: b0_dirty and b0_flags are put at the end of the file name.  For very
@@ -242,6 +246,29 @@ typedef enum {
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
 # include "memline.c.generated.h"
+#endif
+
+static const char e_ml_get_invalid_lnum_nr[]
+  = N_("E315: ml_get: Invalid lnum: %" PRId64);
+static const char e_ml_get_cannot_find_line_nr_in_buffer_nr_str[]
+  = N_("E316: ml_get: Cannot find line %" PRId64 "in buffer %d %s");
+static const char e_pointer_block_id_wrong[]
+  = N_("E317: Pointer block id wrong");
+static const char e_pointer_block_id_wrong_two[]
+  = N_("E317: Pointer block id wrong 2");
+static const char e_pointer_block_id_wrong_three[]
+  = N_("E317: Pointer block id wrong 3");
+static const char e_pointer_block_id_wrong_four[]
+  = N_("E317: Pointer block id wrong 4");
+static const char e_line_number_out_of_range_nr_past_the_end[]
+  = N_("E322: Line number out of range: %" PRId64 " past the end");
+static const char e_line_count_wrong_in_block_nr[]
+  = N_("E323: Line count wrong in block %" PRId64);
+static const char e_warning_pointer_block_corrupted[]
+  = N_("E1364: Warning: Pointer block corrupted");
+
+#if __has_feature(address_sanitizer)
+# define ML_GET_ALLOC_LINES
 #endif
 
 /// Open a new memline for "buf".
@@ -303,11 +330,11 @@ int ml_open(buf_T *buf)
     b0p->b0_dirty = buf->b_changed ? B0_DIRTY : 0;
     b0p->b0_flags = (char)(get_fileformat(buf) + 1);
     set_b0_fname(b0p, buf);
-    (void)os_get_username((char *)b0p->b0_uname, B0_UNAME_SIZE);
+    (void)os_get_username(b0p->b0_uname, B0_UNAME_SIZE);
     b0p->b0_uname[B0_UNAME_SIZE - 1] = NUL;
-    os_get_hostname((char *)b0p->b0_hname, B0_HNAME_SIZE);
+    os_get_hostname(b0p->b0_hname, B0_HNAME_SIZE);
     b0p->b0_hname[B0_HNAME_SIZE - 1] = NUL;
-    long_to_char(os_get_pid(), b0p->b0_pid);
+    long_to_char((long)os_get_pid(), b0p->b0_pid);
   }
 
   // Always sync block number 0 to disk, so we can check the file name in
@@ -347,7 +374,7 @@ int ml_open(buf_T *buf)
   dp->db_index[0] = --dp->db_txt_start;         // at end of block
   dp->db_free -= 1 + (unsigned)INDEX_SIZE;
   dp->db_line_count = 1;
-  *((char_u *)dp + dp->db_txt_start) = NUL;     // empty line
+  *((char *)dp + dp->db_txt_start) = NUL;     // empty line
 
   return OK;
 
@@ -381,7 +408,7 @@ void ml_setname(buf_T *buf)
   // Try all directories in the 'directory' option.
   char *dirp = p_dir;
   bool found_existing_dir = false;
-  for (;;) {
+  while (true) {
     if (*dirp == NUL) {             // tried all directories, fail
       break;
     }
@@ -468,7 +495,7 @@ void ml_open_file(buf_T *buf)
   // Try all directories in 'directory' option.
   char *dirp = p_dir;
   bool found_existing_dir = false;
-  for (;;) {
+  while (true) {
     if (*dirp == NUL) {
       break;
     }
@@ -535,7 +562,8 @@ void ml_close(buf_T *buf, int del_file)
     return;
   }
   mf_close(buf->b_ml.ml_mfp, del_file);       // close the .swp file
-  if (buf->b_ml.ml_line_lnum != 0 && (buf->b_ml.ml_flags & ML_LINE_DIRTY)) {
+  if (buf->b_ml.ml_line_lnum != 0
+      && (buf->b_ml.ml_flags & (ML_LINE_DIRTY | ML_ALLOCATED))) {
     xfree(buf->b_ml.ml_line_ptr);
   }
   xfree(buf->b_ml.ml_stack);
@@ -632,7 +660,7 @@ static void set_b0_fname(ZERO_BL *b0p, buf_T *buf)
     // editing the same file on different machines over a network.
     // First replace home dir path with "~/" with home_replace().
     // Then insert the user name to get "~user/".
-    home_replace(NULL, buf->b_ffname, (char *)b0p->b0_fname,
+    home_replace(NULL, buf->b_ffname, b0p->b0_fname,
                  B0_FNAME_SIZE_CRYPT, true);
     if (b0p->b0_fname[0] == '~') {
       // If there is no user name or it is too long, don't use "~/"
@@ -691,7 +719,7 @@ static void add_b0_fenc(ZERO_BL *b0p, buf_T *buf)
   if ((int)strlen(b0p->b0_fname) + n + 1 > size) {
     b0p->b0_flags = (char)(b0p->b0_flags & ~B0_HAS_FENC);
   } else {
-    memmove((char *)b0p->b0_fname + size - n,
+    memmove(b0p->b0_fname + size - n,
             buf->b_p_fenc, (size_t)n);
     *(b0p->b0_fname + size - n - 1) = NUL;
     b0p->b0_flags |= B0_HAS_FENC;
@@ -757,7 +785,7 @@ void ml_recover(bool checkext)
     directly = false;
 
     // count the number of matching swap files
-    len = recover_names(fname, false, 0, NULL);
+    len = recover_names(fname, false, NULL, 0, NULL);
     if (len == 0) {                 // no swap files found
       semsg(_("E305: No swap file found for %s"), fname);
       goto theend;
@@ -767,7 +795,7 @@ void ml_recover(bool checkext)
       i = 1;
     } else {                          // several swap files found, choose
       // list the names of the swap files
-      (void)recover_names(fname, true, 0, NULL);
+      (void)recover_names(fname, true, NULL, 0, NULL);
       msg_putchar('\n');
       msg_puts(_("Enter number of swap file to use (0 to quit): "));
       i = get_number(false, NULL);
@@ -776,7 +804,7 @@ void ml_recover(bool checkext)
       }
     }
     // get the swap file name that will be used
-    (void)recover_names(fname, false, i, &fname_used);
+    (void)recover_names(fname, false, NULL, i, &fname_used);
   }
   if (fname_used == NULL) {
     goto theend;  // user chose invalid number.
@@ -848,7 +876,7 @@ void ml_recover(bool checkext)
     msg_puts_attr(_("The file was created on "), attr | MSG_HIST);
     // avoid going past the end of a corrupted hostname
     b0p->b0_fname[0] = NUL;
-    msg_puts_attr((char *)b0p->b0_hname, attr | MSG_HIST);
+    msg_puts_attr(b0p->b0_hname, attr | MSG_HIST);
     msg_puts_attr(_(",\nor the file has been damaged."), attr | MSG_HIST);
     msg_end();
     goto theend;
@@ -886,7 +914,7 @@ void ml_recover(bool checkext)
 
   // If .swp file name given directly, use name from swap file for buffer.
   if (directly) {
-    expand_env((char *)b0p->b0_fname, NameBuff, MAXPATHL);
+    expand_env(b0p->b0_fname, NameBuff, MAXPATHL);
     if (setfname(curbuf, NameBuff, NULL, true) == FAIL) {
       goto theend;
     }
@@ -922,7 +950,7 @@ void ml_recover(bool checkext)
   if (b0p->b0_flags & B0_HAS_FENC) {
     int fnsize = B0_FNAME_SIZE_NOCRYPT;
 
-    for (p = (char *)b0p->b0_fname + fnsize; p > b0p->b0_fname && p[-1] != NUL; p--) {}
+    for (p = b0p->b0_fname + fnsize; p > b0p->b0_fname && p[-1] != NUL; p--) {}
     b0_fenc = xstrnsave(p, (size_t)(b0p->b0_fname + fnsize - p));
   }
 
@@ -981,6 +1009,19 @@ void ml_recover(bool checkext)
     } else {          // there is a block
       pp = hp->bh_data;
       if (pp->pb_id == PTR_ID) {                // it is a pointer block
+        bool ptr_block_error = false;
+        if (pp->pb_count_max != PB_COUNT_MAX(mfp)) {
+          ptr_block_error = true;
+          pp->pb_count_max = PB_COUNT_MAX(mfp);
+        }
+        if (pp->pb_count > pp->pb_count_max) {
+          ptr_block_error = true;
+          pp->pb_count = pp->pb_count_max;
+        }
+        if (ptr_block_error) {
+          emsg(_(e_warning_pointer_block_corrupted));
+        }
+
         // check line count when using pointer block first time
         if (idx == 0 && line_count != 0) {
           for (int i = 0; i < (int)pp->pb_count; i++) {
@@ -1045,11 +1086,12 @@ void ml_recover(bool checkext)
           ml_append(lnum++, _("???BLOCK MISSING"),
                     (colnr_T)0, true);
         } else {
-          // it is a data block
-          // Append all the lines in this block
+          // It is a data block.
+          // Append all the lines in this block.
           bool has_error = false;
-          // check length of block
-          // if wrong, use length in pointer block
+
+          // Check the length of the block.
+          // If wrong, use the length given in the pointer block.
           if (page_count * mfp->mf_page_size != dp->db_txt_end) {
             ml_append(lnum++,
                       _("??? from here until ???END lines" " may be messed up"),
@@ -1059,11 +1101,12 @@ void ml_recover(bool checkext)
             dp->db_txt_end = page_count * mfp->mf_page_size;
           }
 
-          // make sure there is a NUL at the end of the block
-          *((char_u *)dp + dp->db_txt_end - 1) = NUL;
+          // Make sure there is a NUL at the end of the block so we
+          // don't go over the end when copying text.
+          *((char *)dp + dp->db_txt_end - 1) = NUL;
 
-          // check number of lines in block
-          // if wrong, use count in data block
+          // Check the number of lines in the block.
+          // If wrong, use the count in the data block.
           if (line_count != dp->db_line_count) {
             ml_append(lnum++,
                       _("??? from here until ???END lines"
@@ -1073,13 +1116,27 @@ void ml_recover(bool checkext)
             has_error = true;
           }
 
+          bool did_questions = false;
           for (int i = 0; i < dp->db_line_count; i++) {
+            if ((char *)&(dp->db_index[i]) >= (char *)dp + dp->db_txt_start) {
+              // line count must be wrong
+              error++;
+              ml_append(lnum++, _("??? lines may be missing"), (colnr_T)0, true);
+              break;
+            }
+
             int txt_start = (dp->db_index[i] & DB_INDEX_MASK);
             if (txt_start <= (int)HEADER_SIZE
                 || txt_start >= (int)dp->db_txt_end) {
-              p = "???";
               error++;
+              // avoid lots of lines with "???"
+              if (did_questions) {
+                continue;
+              }
+              did_questions = true;
+              p = "???";
             } else {
+              did_questions = false;
               p = (char *)dp + txt_start;
             }
             ml_append(lnum++, p, (colnr_T)0, true);
@@ -1195,13 +1252,15 @@ theend:
 /// - list the swap files for "vim -r"
 /// - count the number of swap files when recovering
 /// - list the swap files when recovering
+/// - list the swap files for swapfilelist()
 /// - find the name of the n'th swap file when recovering
 ///
 /// @param fname  base for swap file name
-/// @param list  when true, list the swap file names
+/// @param do_list  when true, list the swap file names
+/// @param ret_list  when not NULL add file names to it
 /// @param nr  when non-zero, return nr'th swap file name
 /// @param fname_out  result when "nr" > 0
-int recover_names(char *fname, int list, int nr, char **fname_out)
+int recover_names(char *fname, bool do_list, list_T *ret_list, int nr, char **fname_out)
 {
   int num_names;
   char *(names[6]);
@@ -1225,7 +1284,7 @@ int recover_names(char *fname, int list, int nr, char **fname_out)
     fname_res = fname;
   }
 
-  if (list) {
+  if (do_list) {
     // use msg() to start the scrolling properly
     msg(_("Swap files found:"));
     msg_putchar('\n');
@@ -1301,9 +1360,11 @@ int recover_names(char *fname, int list, int nr, char **fname_out)
       }
     }
 
-    // remove swapfile name of the current buffer, it must be ignored
+    // Remove swapfile name of the current buffer, it must be ignored.
+    // But keep it for swapfilelist().
     if (curbuf->b_ml.ml_mfp != NULL
-        && (p = curbuf->b_ml.ml_mfp->mf_fname) != NULL) {
+        && (p = curbuf->b_ml.ml_mfp->mf_fname) != NULL
+        && ret_list == NULL) {
       for (int i = 0; i < num_files; i++) {
         // Do not expand wildcards, on Windows would try to expand
         // "%tmp%" in "%tmp%file"
@@ -1328,7 +1389,7 @@ int recover_names(char *fname, int list, int nr, char **fname_out)
         *fname_out = xstrdup(files[nr - 1 + num_files - file_count]);
         dirp = "";                        // stop searching
       }
-    } else if (list) {
+    } else if (do_list) {
       if (dir_name[0] == '.' && dir_name[1] == NUL) {
         if (fname == NULL) {
           msg_puts(_("   In current directory:\n"));
@@ -1346,7 +1407,7 @@ int recover_names(char *fname, int list, int nr, char **fname_out)
           // print the swap file name
           msg_outnum((long)++file_count);
           msg_puts(".    ");
-          msg_puts((const char *)path_tail(files[i]));
+          msg_puts(path_tail(files[i]));
           msg_putchar('\n');
           (void)swapfile_info(files[i]);
         }
@@ -1354,6 +1415,11 @@ int recover_names(char *fname, int list, int nr, char **fname_out)
         msg_puts(_("      -- none --\n"));
       }
       ui_flush();
+    } else if (ret_list != NULL) {
+      for (int i = 0; i < num_files; i++) {
+        char *name = concat_fnames(dir_name, files[i], true);
+        tv_list_append_allocated_string(ret_list, name);
+      }
     } else {
       file_count += num_files;
     }
@@ -1411,11 +1477,11 @@ void get_b0_dict(const char *fname, dict_T *d)
       } else {
         // We have swap information.
         tv_dict_add_str_len(d, S_LEN("version"), b0.b0_version, 10);
-        tv_dict_add_str_len(d, S_LEN("user"), (char *)b0.b0_uname,
+        tv_dict_add_str_len(d, S_LEN("user"), b0.b0_uname,
                             B0_UNAME_SIZE);
-        tv_dict_add_str_len(d, S_LEN("host"), (char *)b0.b0_hname,
+        tv_dict_add_str_len(d, S_LEN("host"), b0.b0_hname,
                             B0_HNAME_SIZE);
-        tv_dict_add_str_len(d, S_LEN("fname"), (char *)b0.b0_fname,
+        tv_dict_add_str_len(d, S_LEN("fname"), b0.b0_fname,
                             B0_FNAME_SIZE_ORG);
 
         tv_dict_add_nr(d, S_LEN("pid"), char_to_long(b0.b0_pid));
@@ -1480,7 +1546,7 @@ static time_t swapfile_info(char *fname)
         if (b0.b0_fname[0] == NUL) {
           msg_puts(_("[No Name]"));
         } else {
-          msg_outtrans((char *)b0.b0_fname);
+          msg_outtrans(b0.b0_fname);
         }
 
         msg_puts(_("\n          modified: "));
@@ -1488,7 +1554,7 @@ static time_t swapfile_info(char *fname)
 
         if (*(b0.b0_uname) != NUL) {
           msg_puts(_("\n         user name: "));
-          msg_outtrans((char *)b0.b0_uname);
+          msg_outtrans(b0.b0_uname);
         }
 
         if (*(b0.b0_hname) != NUL) {
@@ -1497,13 +1563,13 @@ static time_t swapfile_info(char *fname)
           } else {
             msg_puts(_("\n         host name: "));
           }
-          msg_outtrans((char *)b0.b0_hname);
+          msg_outtrans(b0.b0_hname);
         }
 
         if (char_to_long(b0.b0_pid) != 0L) {
           msg_puts(_("\n        process ID: "));
           msg_outnum(char_to_long(b0.b0_pid));
-          if (swapfile_process_running(&b0, (const char *)fname)) {
+          if (swapfile_process_running(&b0, fname)) {
             msg_puts(_(" (STILL RUNNING)"));
             process_still_running = true;
           }
@@ -1776,11 +1842,10 @@ char *ml_get_buf(buf_T *buf, linenr_T lnum, bool will_change)
       // Avoid giving this message for a recursive call, may happen when
       // the GUI redraws part of the text.
       recursive++;
-      siemsg(_("E315: ml_get: invalid lnum: %" PRId64), (int64_t)lnum);
+      siemsg(_(e_ml_get_invalid_lnum_nr), (int64_t)lnum);
       recursive--;
     }
     ml_flush_line(buf);
-    buf->b_ml.ml_flags &= ~ML_LINE_DIRTY;
 errorret:
     STRCPY(questions, "???");
     buf->b_ml.ml_line_lnum = lnum;
@@ -1812,7 +1877,7 @@ errorret:
         recursive++;
         get_trans_bufname(buf);
         shorten_dir(NameBuff);
-        siemsg(_("E316: ml_get: cannot find line %" PRId64 " in buffer %d %s"),
+        siemsg(_(e_ml_get_cannot_find_line_nr_in_buffer_nr_str),
                (int64_t)lnum, buf->b_fnum, NameBuff);
         recursive--;
       }
@@ -1824,18 +1889,36 @@ errorret:
     char *ptr = (char *)dp + (dp->db_index[lnum - buf->b_ml.ml_locked_low] & DB_INDEX_MASK);
     buf->b_ml.ml_line_ptr = ptr;
     buf->b_ml.ml_line_lnum = lnum;
-    buf->b_ml.ml_flags &= ~ML_LINE_DIRTY;
+    buf->b_ml.ml_flags &= ~(ML_LINE_DIRTY | ML_ALLOCATED);
   }
   if (will_change) {
     buf->b_ml.ml_flags |= (ML_LOCKED_DIRTY | ML_LOCKED_POS);
+#ifdef ML_GET_ALLOC_LINES
+    if (buf->b_ml.ml_flags & ML_ALLOCATED) {
+      // can't make the change in the data block
+      buf->b_ml.ml_flags |= ML_LINE_DIRTY;
+    }
+#endif
     ml_add_deleted_len_buf(buf, buf->b_ml.ml_line_ptr, -1);
   }
 
+#ifdef ML_GET_ALLOC_LINES
+  if ((buf->b_ml.ml_flags & (ML_LINE_DIRTY | ML_ALLOCATED)) == 0) {
+    // make sure the text is in allocated memory
+    buf->b_ml.ml_line_ptr = xstrdup(buf->b_ml.ml_line_ptr);
+    buf->b_ml.ml_flags |= ML_ALLOCATED;
+    if (will_change) {
+      // can't make the change in the data block
+      buf->b_ml.ml_flags |= ML_LINE_DIRTY;
+    }
+  }
+#endif
   return buf->b_ml.ml_line_ptr;
 }
 
 /// Check if a line that was just obtained by a call to ml_get
 /// is in allocated memory.
+/// This ignores ML_ALLOCATED to get the same behavior as without ML_GET_ALLOC_LINES.
 int ml_line_alloced(void)
 {
   return curbuf->b_ml.ml_flags & ML_LINE_DIRTY;
@@ -2022,7 +2105,6 @@ static int ml_append_int(buf_T *buf, linenr_T lnum, char *line, colnr_T len, boo
     int lineadd;
     blocknr_T bnum_left, bnum_right;
     linenr_T lnum_left, lnum_right;
-    int pb_idx;
     PTR_BL *pp_new;
 
     // We are going to allocate a new data block. Depending on the
@@ -2156,13 +2238,13 @@ static int ml_append_int(buf_T *buf, linenr_T lnum, char *line, colnr_T len, boo
     // update pointer blocks for the new data block
     for (stack_idx = buf->b_ml.ml_stack_top - 1; stack_idx >= 0; stack_idx--) {
       infoptr_T *ip = &(buf->b_ml.ml_stack[stack_idx]);
-      pb_idx = ip->ip_index;
+      int pb_idx = ip->ip_index;
       if ((hp = mf_get(mfp, ip->ip_bnum, 1)) == NULL) {
         return FAIL;
       }
       PTR_BL *pp = hp->bh_data;         // must be pointer block
       if (pp->pb_id != PTR_ID) {
-        iemsg(_("E317: pointer block id wrong 3"));
+        iemsg(_(e_pointer_block_id_wrong_three));
         mf_put(mfp, hp, false, false);
         return FAIL;
       }
@@ -2212,7 +2294,7 @@ static int ml_append_int(buf_T *buf, linenr_T lnum, char *line, colnr_T len, boo
       // allocate a new pointer block
       // move some of the pointer into the new block
       // prepare for updating the parent block
-      for (;;) {             // do this twice when splitting block 1
+      while (true) {          // do this twice when splitting block 1
         hp_new = ml_new_ptr(mfp);
         if (hp_new == NULL) {             // TODO(vim): try to fix tree
           return FAIL;
@@ -2353,22 +2435,21 @@ int ml_replace_buf(buf_T *buf, linenr_T lnum, char *line, bool copy)
     return FAIL;
   }
 
-  bool readlen = true;
-
   if (copy) {
     line = xstrdup(line);
   }
-  if (buf->b_ml.ml_line_lnum != lnum) {  // other line buffered
-    ml_flush_line(buf);  // flush it
-  } else if (buf->b_ml.ml_flags & ML_LINE_DIRTY) {  // same line allocated
-    ml_add_deleted_len_buf(buf, buf->b_ml.ml_line_ptr, -1);
-    readlen = false;  // already added the length
 
-    xfree(buf->b_ml.ml_line_ptr);  // free it
+  if (buf->b_ml.ml_line_lnum != lnum) {
+    // another line is buffered, flush it
+    ml_flush_line(buf);
   }
 
-  if (readlen && kv_size(buf->update_callbacks)) {
+  if (kv_size(buf->update_callbacks)) {
     ml_add_deleted_len_buf(buf, ml_get_buf(buf, lnum, false), -1);
+  }
+
+  if (buf->b_ml.ml_flags & (ML_LINE_DIRTY | ML_ALLOCATED)) {
+    xfree(buf->b_ml.ml_line_ptr);  // free allocated line
   }
 
   buf->b_ml.ml_line_ptr = line;
@@ -2466,7 +2547,7 @@ static int ml_delete_int(buf_T *buf, linenr_T lnum, bool message)
       }
       PTR_BL *pp = hp->bh_data;         // must be pointer block
       if (pp->pb_id != PTR_ID) {
-        iemsg(_("E317: pointer block id wrong 4"));
+        iemsg(_(e_pointer_block_id_wrong_four));
         mf_put(mfp, hp, false, false);
         return FAIL;
       }
@@ -2693,8 +2774,11 @@ static void ml_flush_line(buf_T *buf)
     xfree(new_line);
 
     entered = false;
+  } else if (buf->b_ml.ml_flags & ML_ALLOCATED) {
+    xfree(buf->b_ml.ml_line_ptr);
   }
 
+  buf->b_ml.ml_flags &= ~(ML_LINE_DIRTY | ML_ALLOCATED);
   buf->b_ml.ml_line_lnum = 0;
   buf->b_ml.ml_line_offset = 0;
 }
@@ -2720,8 +2804,7 @@ static bhdr_T *ml_new_ptr(memfile_T *mfp)
   PTR_BL *pp = hp->bh_data;
   pp->pb_id = PTR_ID;
   pp->pb_count = 0;
-  pp->pb_count_max
-    = (uint16_t)((mfp->mf_page_size - offsetof(PTR_BL, pb_pointer)) / sizeof(PTR_EN));
+  pp->pb_count_max = PB_COUNT_MAX(mfp);
 
   return hp;
 }
@@ -2806,7 +2889,7 @@ static bhdr_T *ml_find_line(buf_T *buf, linenr_T lnum, int action)
     buf->b_ml.ml_stack_top = 0;         // start at the root
   }
   // search downwards in the tree until a data block is found
-  for (;;) {
+  while (true) {
     if ((hp = mf_get(mfp, bnum, (unsigned)page_count)) == NULL) {
       goto error_noblock;
     }
@@ -2830,7 +2913,7 @@ static bhdr_T *ml_find_line(buf_T *buf, linenr_T lnum, int action)
 
     pp = (PTR_BL *)(dp);                // must be pointer block
     if (pp->pb_id != PTR_ID) {
-      iemsg(_("E317: pointer block id wrong"));
+      iemsg(_(e_pointer_block_id_wrong));
       goto error_block;
     }
 
@@ -2868,10 +2951,10 @@ static bhdr_T *ml_find_line(buf_T *buf, linenr_T lnum, int action)
     }
     if (idx >= (int)pp->pb_count) {         // past the end: something wrong!
       if (lnum > buf->b_ml.ml_line_count) {
-        siemsg(_("E322: line number out of range: %" PRId64 " past the end"),
+        siemsg(_(e_line_number_out_of_range_nr_past_the_end),
                (int64_t)lnum - buf->b_ml.ml_line_count);
       } else {
-        siemsg(_("E323: line count wrong in block %" PRId64), bnum);
+        siemsg(_(e_line_count_wrong_in_block_nr), bnum);
       }
       goto error_block;
     }
@@ -2941,7 +3024,7 @@ static void ml_lineadd(buf_T *buf, int count)
     PTR_BL *pp = hp->bh_data;       // must be pointer block
     if (pp->pb_id != PTR_ID) {
       mf_put(mfp, hp, false, false);
-      iemsg(_("E317: pointer block id wrong 2"));
+      iemsg(_(e_pointer_block_id_wrong_two));
       break;
     }
     pp->pb_pointer[ip->ip_index].pe_line_count += count;
@@ -2970,7 +3053,7 @@ int resolve_symlink(const char *fname, char *buf)
   // Put the result so far in tmp[], starting with the original name.
   xstrlcpy(tmp, fname, MAXPATHL);
 
-  for (;;) {
+  while (true) {
     // Limit symlink depth to 100, catch recursive loops.
     if (++depth == 100) {
       semsg(_("E773: Symlink loop for \"%s\""), fname);
@@ -3029,7 +3112,7 @@ char *makeswapname(char *fname, char *ffname, buf_T *buf, char *dir_name)
 
   // Expand symlink in the file name, so that we put the swap file with the
   // actual file instead of with the symlink.
-  if (resolve_symlink(fname, (char *)fname_buf) == OK) {
+  if (resolve_symlink(fname, fname_buf) == OK) {
     fname_res = fname_buf;
   }
 #endif
@@ -3211,7 +3294,6 @@ static int do_swapexists(buf_T *buf, char *fname)
 static char *findswapname(buf_T *buf, char **dirp, char *old_fname, bool *found_existing_dir)
   FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_NONNULL_ARG(1, 2, 4)
 {
-  size_t n;
   char *buf_fname = buf->b_fname;
 
   // Isolate a directory name from *dirp and put it in dir_name.
@@ -3223,7 +3305,8 @@ static char *findswapname(buf_T *buf, char **dirp, char *old_fname, bool *found_
   // we try different names until we find one that does not exist yet
   char *fname = makeswapname(buf_fname, buf->b_ffname, buf, dir_name);
 
-  for (;;) {
+  while (true) {
+    size_t n;
     if (fname == NULL) {        // must be out of memory
       break;
     }
@@ -3267,12 +3350,12 @@ static char *findswapname(buf_T *buf, char **dirp, char *old_fname, bool *found_
             // have a different mountpoint.
             if (b0.b0_flags & B0_SAME_DIR) {
               if (path_fnamecmp(path_tail(buf->b_ffname),
-                                path_tail((char *)b0.b0_fname)) != 0
+                                path_tail(b0.b0_fname)) != 0
                   || !same_directory(fname, buf->b_ffname)) {
                 // Symlinks may point to the same file even
                 // when the name differs, need to check the
                 // inode too.
-                expand_env((char *)b0.b0_fname, NameBuff, MAXPATHL);
+                expand_env(b0.b0_fname, NameBuff, MAXPATHL);
                 if (fnamecmp_ino(buf->b_ffname, NameBuff,
                                  char_to_long(b0.b0_ino))) {
                   differ = true;
@@ -3281,7 +3364,7 @@ static char *findswapname(buf_T *buf, char **dirp, char *old_fname, bool *found_
             } else {
               // The name in the swap file may be
               // "~user/path/file".  Expand it first.
-              expand_env((char *)b0.b0_fname, NameBuff, MAXPATHL);
+              expand_env(b0.b0_fname, NameBuff, MAXPATHL);
               if (fnamecmp_ino(buf->b_ffname, NameBuff,
                                char_to_long(b0.b0_ino))) {
                 differ = true;
@@ -3419,7 +3502,7 @@ static char *findswapname(buf_T *buf, char **dirp, char *old_fname, bool *found_
   } else if (!*found_existing_dir && **dirp == NUL) {
     int ret;
     char *failed_dir;
-    if ((ret = os_mkdir_recurse(dir_name, 0755, &failed_dir)) != 0) {
+    if ((ret = os_mkdir_recurse(dir_name, 0755, &failed_dir, NULL)) != 0) {
       semsg(_("E303: Unable to create directory \"%s\" for swap file, "
               "recovery impossible: %s"),
             failed_dir, os_strerror(ret));
@@ -3516,8 +3599,8 @@ static bool fnamecmp_ino(char *fname_c, char *fname_s, long ino_block0)
 
   // One of the inode numbers is unknown, try a forced vim_FullName() and
   // compare the file names.
-  retval_c = vim_FullName(fname_c, (char *)buf_c, MAXPATHL, true);
-  retval_s = vim_FullName(fname_s, (char *)buf_s, MAXPATHL, true);
+  retval_c = vim_FullName(fname_c, buf_c, MAXPATHL, true);
+  retval_s = vim_FullName(fname_s, buf_s, MAXPATHL, true);
   if (retval_c == OK && retval_s == OK) {
     return strcmp(buf_c, buf_s) != 0;
   }
@@ -3533,19 +3616,21 @@ static bool fnamecmp_ino(char *fname_c, char *fname_s, long ino_block0)
 
 /// Move a long integer into a four byte character array.
 /// Used for machine independency in block zero.
-static void long_to_char(long n, char_u *s)
+static void long_to_char(long n, char *s_in)
 {
-  s[0] = (char_u)(n & 0xff);
+  uint8_t *s= (uint8_t *)s_in;
+  s[0] = (uint8_t)(n & 0xff);
   n = (unsigned)n >> 8;
-  s[1] = (char_u)(n & 0xff);
+  s[1] = (uint8_t)(n & 0xff);
   n = (unsigned)n >> 8;
-  s[2] = (char_u)(n & 0xff);
+  s[2] = (uint8_t)(n & 0xff);
   n = (unsigned)n >> 8;
-  s[3] = (char_u)(n & 0xff);
+  s[3] = (uint8_t)(n & 0xff);
 }
 
-static long char_to_long(const char_u *s)
+static long char_to_long(const char *s_in)
 {
+  const uint8_t *s = (uint8_t *)s_in;
   long retval;
 
   retval = s[3];
@@ -3605,11 +3690,8 @@ static void ml_updatechunk(buf_T *buf, linenr_T line, long len, int updtype)
 
   linenr_T curline = ml_upd_lastcurline;
   int curix = ml_upd_lastcurix;
-  long size;
   chunksize_T *curchnk;
-  int rest;
   bhdr_T *hp;
-  DATA_BL *dp;
 
   if (buf->b_ml.ml_usedchunks == -1 || len == 0) {
     return;
@@ -3655,6 +3737,8 @@ static void ml_updatechunk(buf_T *buf, linenr_T line, long len, int updtype)
   }
   curchnk->mlcs_totalsize += len;
   if (updtype == ML_CHNK_ADDLINE) {
+    int rest;
+    DATA_BL *dp;
     curchnk->mlcs_numlines++;
 
     // May resize here so we don't have to do it in both cases below
@@ -3665,17 +3749,14 @@ static void ml_updatechunk(buf_T *buf, linenr_T line, long len, int updtype)
     }
 
     if (buf->b_ml.ml_chunksize[curix].mlcs_numlines >= MLCS_MAXL) {
-      int count;                    // number of entries in block
-      int idx;
       int text_end;
-      int linecnt;
 
       memmove(buf->b_ml.ml_chunksize + curix + 1,
               buf->b_ml.ml_chunksize + curix,
               (size_t)(buf->b_ml.ml_usedchunks - curix) * sizeof(chunksize_T));
       // Compute length of first half of lines in the split chunk
-      size = 0;
-      linecnt = 0;
+      long size = 0;
+      int linecnt = 0;
       while (curline < buf->b_ml.ml_line_count
              && linecnt < MLCS_MINL) {
         if ((hp = ml_find_line(buf, curline, ML_FIND)) == NULL) {
@@ -3683,8 +3764,9 @@ static void ml_updatechunk(buf_T *buf, linenr_T line, long len, int updtype)
           return;
         }
         dp = hp->bh_data;
-        count = buf->b_ml.ml_locked_high - buf->b_ml.ml_locked_low + 1;
-        idx = curline - buf->b_ml.ml_locked_low;
+        int count
+          = buf->b_ml.ml_locked_high - buf->b_ml.ml_locked_low + 1;  // number of entries in block
+        int idx = curline - buf->b_ml.ml_locked_low;
         curline = buf->b_ml.ml_locked_high + 1;
         if (idx == 0) {      // first line in block, text at the end
           text_end = (int)dp->db_txt_end;
@@ -3793,13 +3875,8 @@ long ml_find_line_or_offset(buf_T *buf, linenr_T lnum, long *offp, bool no_ff)
   int curix;
   long size;
   bhdr_T *hp;
-  DATA_BL *dp;
-  int count;                    // number of entries in block
-  int idx;
-  int start_idx;
   int text_end;
   long offset;
-  int len;
   int ffdos = !no_ff && (get_fileformat(buf) == EOL_DOS);
   int extra = 0;
 
@@ -3859,9 +3936,11 @@ long ml_find_line_or_offset(buf_T *buf, linenr_T lnum, long *offp, bool no_ff)
         || (hp = ml_find_line(buf, curline, ML_FIND)) == NULL) {
       return -1;
     }
-    dp = hp->bh_data;
-    count = buf->b_ml.ml_locked_high - buf->b_ml.ml_locked_low + 1;
-    start_idx = idx = curline - buf->b_ml.ml_locked_low;
+    DATA_BL *dp = hp->bh_data;
+    int count
+      = buf->b_ml.ml_locked_high - buf->b_ml.ml_locked_low + 1;  // number of entries in block
+    int idx;
+    int start_idx = idx = curline - buf->b_ml.ml_locked_low;
     if (idx == 0) {  // first line in block, text at the end
       text_end = (int)dp->db_txt_end;
     } else {
@@ -3889,7 +3968,7 @@ long ml_find_line_or_offset(buf_T *buf, linenr_T lnum, long *offp, bool no_ff)
         idx++;
       }
     }
-    len = text_end - (int)((dp->db_index[idx]) & DB_INDEX_MASK);
+    int len = text_end - (int)((dp->db_index[idx]) & DB_INDEX_MASK);
     size += len;
     if (offset != 0 && size >= offset) {
       if (size + ffdos == offset) {
@@ -3969,7 +4048,7 @@ int inc(pos_T *lp)
   if (lp->col != MAXCOL) {
     const char *const p = ml_get_pos(lp);
     if (*p != NUL) {  // still within line, move to next char (may be NUL)
-      const int l = utfc_ptr2len((char *)p);
+      const int l = utfc_ptr2len(p);
 
       lp->col += l;
       return ((p[l] != NUL) ? 0 : 2);

@@ -7,7 +7,10 @@ local NIL = helpers.NIL
 local eval = helpers.eval
 local feed = helpers.feed
 local clear = helpers.clear
+local matches = helpers.matches
 local meths = helpers.meths
+local exec_lua = helpers.exec_lua
+local exec_capture = helpers.exec_capture
 local funcs = helpers.funcs
 local source = helpers.source
 local dedent = helpers.dedent
@@ -15,7 +18,6 @@ local command = helpers.command
 local exc_exec = helpers.exc_exec
 local pcall_err = helpers.pcall_err
 local write_file = helpers.write_file
-local exec_capture = helpers.exec_capture
 local curbufmeths = helpers.curbufmeths
 local remove_trace = helpers.remove_trace
 
@@ -26,22 +28,27 @@ describe(':lua command', function()
     eq('', exec_capture(
       'lua vim.api.nvim_buf_set_lines(1, 1, 2, false, {"TEST"})'))
     eq({'', 'TEST'}, curbufmeths.get_lines(0, 100, false))
-    source(dedent([[
+    source([[
       lua << EOF
         vim.api.nvim_buf_set_lines(1, 1, 2, false, {"TSET"})
-      EOF]]))
+      EOF]])
     eq({'', 'TSET'}, curbufmeths.get_lines(0, 100, false))
-    source(dedent([[
+    source([[
       lua << EOF
-        vim.api.nvim_buf_set_lines(1, 1, 2, false, {"SETT"})]]))
+        vim.api.nvim_buf_set_lines(1, 1, 2, false, {"SETT"})]])
     eq({'', 'SETT'}, curbufmeths.get_lines(0, 100, false))
-    source(dedent([[
+    source([[
       lua << EOF
         vim.api.nvim_buf_set_lines(1, 1, 2, false, {"ETTS"})
         vim.api.nvim_buf_set_lines(1, 2, 3, false, {"TTSE"})
         vim.api.nvim_buf_set_lines(1, 3, 4, false, {"STTE"})
-      EOF]]))
+      EOF]])
     eq({'', 'ETTS', 'TTSE', 'STTE'}, curbufmeths.get_lines(0, 100, false))
+    matches('.*Vim%(lua%):E15: Invalid expression: .*', pcall_err(source, [[
+      lua << eval EOF
+        {}
+      EOF
+    ]]))
   end)
   it('throws catchable errors', function()
     eq([[Vim(lua):E5107: Error loading lua [string ":lua"]:0: unexpected symbol near ')']],
@@ -142,22 +149,30 @@ describe(':lua command', function()
     ]]}
   end)
 
-  it('Can print results of =expr', function()
-    helpers.exec_lua("x = 5")
-    eq("5", helpers.exec_capture(':lua =x'))
-    helpers.exec_lua("function x() return 'hello' end")
-    eq([["hello"]], helpers.exec_capture(':lua = x()'))
-    helpers.exec_lua("x = {a = 1, b = 2}")
-    eq("{\n  a = 1,\n  b = 2\n}", helpers.exec_capture(':lua  =x'))
-    helpers.exec_lua([[function x(success)
+  it('prints result of =expr', function()
+    exec_lua("x = 5")
+    eq("5", exec_capture(':lua =x'))
+    eq("5", exec_capture('=x'))
+    exec_lua("function x() return 'hello' end")
+    eq('hello', exec_capture(':lua = x()'))
+    exec_lua("x = {a = 1, b = 2}")
+    eq("{\n  a = 1,\n  b = 2\n}", exec_capture(':lua  =x'))
+    exec_lua([[function x(success)
       if success then
         return true, "Return value"
       else
         return false, nil, "Error message"
       end
     end]])
-    eq([[true    "Return value"]], helpers.exec_capture(':lua  =x(true)'))
-    eq([[false    nil    "Error message"]], helpers.exec_capture(':lua  =x(false)'))
+    eq(dedent[[
+      true
+      Return value]],
+    exec_capture(':lua  =x(true)'))
+    eq(dedent[[
+      false
+      nil
+      Error message]],
+    exec_capture('=x(false)'))
   end)
 end)
 
@@ -183,7 +198,7 @@ describe(':luado command', function()
   end)
   it('works correctly when changing lines out of range', function()
     curbufmeths.set_lines(0, 1, false, {"ABC", "def", "gHi"})
-    eq('Vim(luado):E322: line number out of range: 1 past the end',
+    eq('Vim(luado):E322: Line number out of range: 1 past the end',
        pcall_err(command, '2,$luado vim.api.nvim_command("%d") return linenr'))
     eq({''}, curbufmeths.get_lines(0, -1, false))
   end)
@@ -199,7 +214,7 @@ describe(':luado command', function()
   end)
   it('fails in sandbox when needed', function()
     curbufmeths.set_lines(0, 1, false, {"ABC", "def", "gHi"})
-    eq('Vim(luado):E48: Not allowed in sandbox',
+    eq('Vim(luado):E48: Not allowed in sandbox: sandbox luado runs = (runs or 0) + 1',
        pcall_err(command, 'sandbox luado runs = (runs or 0) + 1'))
     eq(NIL, funcs.luaeval('runs'))
   end)

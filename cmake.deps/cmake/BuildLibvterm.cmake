@@ -1,6 +1,3 @@
-if(USE_EXISTING_SRC_DIR)
-  unset(LIBVTERM_URL)
-endif()
 ExternalProject_Add(libvterm
   URL ${LIBVTERM_URL}
   URL_HASH SHA256=${LIBVTERM_SHA256}
@@ -11,5 +8,3 @@ ExternalProject_Add(libvterm
     ${DEPS_BUILD_DIR}/src/libvterm/CMakeLists.txt
   CMAKE_ARGS ${DEPS_CMAKE_ARGS}
   CMAKE_CACHE_ARGS ${DEPS_CMAKE_CACHE_ARGS})
-
-list(APPEND THIRD_PARTY_DEPS libvterm)

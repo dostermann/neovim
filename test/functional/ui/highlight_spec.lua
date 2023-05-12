@@ -376,7 +376,6 @@ describe('highlight', function()
 
     -- Vertical cursor: highlights char-at-cursor. #8983
     command('set guicursor=a:block-blinkon175')
-    feed('<esc>gg$vhhh')
     screen:expect([[
         line1 foo{1:^ bar}     |
                           |
@@ -1412,10 +1411,10 @@ describe('ColorColumn highlight', function()
       [3] = {foreground = Screen.colors.Brown},  -- LineNr
       [4] = {foreground = Screen.colors.Brown, bold = true},  -- CursorLineNr
       [5] = {foreground = Screen.colors.Blue, bold = true},  -- NonText
-      -- NonText and ColorColumn
       [6] = {foreground = Screen.colors.Blue, background = Screen.colors.LightRed, bold = true},
       [7] = {reverse = true, bold = true},  -- StatusLine
       [8] = {reverse = true},  -- StatusLineNC
+      [9] = {background = Screen.colors.Grey90, foreground = Screen.colors.Red},
     })
     screen:attach()
   end)
@@ -1498,6 +1497,25 @@ describe('ColorColumn highlight', function()
       {5:~                                       }|
       {5:~                                       }|
       {5:~                                       }|
+                                              |
+    ]])
+  end)
+
+  it('is combined with low-priority CursorLine highlight #23016', function()
+    screen:try_resize(40, 2)
+    command('set colorcolumn=30 cursorline')
+    screen:expect([[
+      {2:^                             }{1: }{2:          }|
+                                              |
+    ]])
+    command('hi clear ColorColumn')
+    screen:expect([[
+      {2:^                                        }|
+                                              |
+    ]])
+    command('hi ColorColumn guifg=Red')
+    screen:expect([[
+      {2:^                             }{9: }{2:          }|
                                               |
     ]])
   end)
@@ -1809,6 +1827,31 @@ describe("'winhighlight' highlight", function()
       {0:~                   }|
       {4:[No Name] [+]       }|
                           |
+    ]])
+  end)
+
+  it('works for background color in rightleft window #22640', function()
+    -- Use a wide screen to also check that this doesn't overflow linebuf_attr.
+    screen:try_resize(80, 6)
+    insert('aa')
+    command('setlocal rightleft')
+    command('setlocal winhl=Normal:Background1')
+    screen:expect([[
+      {1:                                                                              ^aa}|
+      {2:                                                                               ~}|
+      {2:                                                                               ~}|
+      {2:                                                                               ~}|
+      {2:                                                                               ~}|
+                                                                                      |
+    ]])
+    command('botright vsplit')
+    screen:expect([[
+      {1:                                     aa│                                      ^aa}|
+      {2:                                      ~}{1:│}{2:                                       ~}|
+      {2:                                      ~}{1:│}{2:                                       ~}|
+      {2:                                      ~}{1:│}{2:                                       ~}|
+      {4:[No Name] [+]                           }{3:[No Name] [+]                           }|
+                                                                                      |
     ]])
   end)
 
@@ -2406,6 +2449,23 @@ describe("'winhighlight' highlight", function()
       more text                               |
       {4:[No Name]                        }{1:1,1 All}|
                                               |
+    ]]}
+  end)
+
+  it('can link to empty highlight group', function()
+    command 'hi NormalNC guibg=Red' -- czerwone time
+    command 'set winhl=NormalNC:Normal'
+    command 'split'
+
+    screen:expect{grid=[[
+      ^                    |
+      {0:~                   }|
+      {0:~                   }|
+      {3:[No Name]           }|
+                          |
+      {0:~                   }|
+      {4:[No Name]           }|
+                          |
     ]]}
   end)
 end)

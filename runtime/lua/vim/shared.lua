@@ -59,20 +59,50 @@ end)()
 
 --- Splits a string at each instance of a separator.
 ---
----@see |vim.split()|
----@see |luaref-patterns|
----@see https://www.lua.org/pil/20.2.html
----@see http://lua-users.org/wiki/StringLibraryTutorial
+--- Example:
+---   <pre>lua
+---   for s in vim.gsplit(':aa::b:', ':', {plain=true}) do
+---     print(s)
+---   end
+---   </pre>
 ---
----@param s string String to split
----@param sep string Separator or pattern
----@param plain (boolean|nil) If `true` use `sep` literally (passed to string.find)
----@return fun():string (function) Iterator over the split components
-function vim.gsplit(s, sep, plain)
-  vim.validate({ s = { s, 's' }, sep = { sep, 's' }, plain = { plain, 'b', true } })
+--- If you want to also inspect the separator itself (instead of discarding it), use
+--- |string.gmatch()|. Example:
+---   <pre>lua
+---   for word, num in ('foo111bar222'):gmatch('([^0-9]*)(%d*)') do
+---     print(('word: %s num: %s'):format(word, num))
+---   end
+---   </pre>
+---
+--- @see |string.gmatch()|
+--- @see |vim.split()|
+--- @see |luaref-patterns|
+--- @see https://www.lua.org/pil/20.2.html
+--- @see http://lua-users.org/wiki/StringLibraryTutorial
+---
+--- @param s string String to split
+--- @param sep string Separator or pattern
+--- @param opts (table|nil) Keyword arguments |kwargs|:
+---       - plain: (boolean) Use `sep` literally (as in string.find).
+---       - trimempty: (boolean) Discard empty segments at start and end of the sequence.
+---@return fun():string|nil (function) Iterator over the split components
+function vim.gsplit(s, sep, opts)
+  local plain
+  local trimempty = false
+  if type(opts) == 'boolean' then
+    plain = opts -- For backwards compatibility.
+  else
+    vim.validate({ s = { s, 's' }, sep = { sep, 's' }, opts = { opts, 't', true } })
+    opts = opts or {}
+    plain, trimempty = opts.plain, opts.trimempty
+  end
 
   local start = 1
   local done = false
+
+  -- For `trimempty`: queue of collected segments, to be emitted at next pass.
+  local segs = {}
+  local empty_start = true -- Only empty segments seen so far.
 
   local function _pass(i, j, ...)
     if i then
@@ -87,16 +117,42 @@ function vim.gsplit(s, sep, plain)
   end
 
   return function()
-    if done or (s == '' and sep == '') then
-      return
-    end
-    if sep == '' then
+    if trimempty and #segs > 0 then
+      -- trimempty: Pop the collected segments.
+      return table.remove(segs)
+    elseif done or (s == '' and sep == '') then
+      return nil
+    elseif sep == '' then
       if start == #s then
         done = true
       end
       return _pass(start + 1, start)
     end
-    return _pass(s:find(sep, start, plain))
+
+    local seg = _pass(s:find(sep, start, plain))
+
+    -- Trim empty segments from start/end.
+    if trimempty and seg ~= '' then
+      empty_start = false
+    elseif trimempty and seg == '' then
+      while not done and seg == '' do
+        table.insert(segs, 1, '')
+        seg = _pass(s:find(sep, start, plain))
+      end
+      if done and seg == '' then
+        return nil
+      elseif empty_start then
+        empty_start = false
+        segs = {}
+        return seg
+      end
+      if seg ~= '' then
+        table.insert(segs, 1, seg)
+      end
+      return table.remove(segs)
+    end
+
+    return seg
   end
 end
 
@@ -111,48 +167,17 @@ end
 --- </pre>
 ---
 ---@see |vim.gsplit()|
+---@see |string.gmatch()|
 ---
 ---@param s string String to split
 ---@param sep string Separator or pattern
----@param kwargs (table|nil) Keyword arguments:
----       - plain: (boolean) If `true` use `sep` literally (passed to string.find)
----       - trimempty: (boolean) If `true` remove empty items from the front
----         and back of the list
+---@param opts (table|nil) Keyword arguments |kwargs| accepted by |vim.gsplit()|
 ---@return string[] List of split components
-function vim.split(s, sep, kwargs)
-  local plain
-  local trimempty = false
-  if type(kwargs) == 'boolean' then
-    -- Support old signature for backward compatibility
-    plain = kwargs
-  else
-    vim.validate({ kwargs = { kwargs, 't', true } })
-    kwargs = kwargs or {}
-    plain = kwargs.plain
-    trimempty = kwargs.trimempty
-  end
-
+function vim.split(s, sep, opts)
   local t = {}
-  local skip = trimempty
-  for c in vim.gsplit(s, sep, plain) do
-    if c ~= '' then
-      skip = false
-    end
-
-    if not skip then
-      table.insert(t, c)
-    end
+  for c in vim.gsplit(s, sep, opts) do
+    table.insert(t, c)
   end
-
-  if trimempty then
-    for i = #t, 1, -1 do
-      if t[i] ~= '' then
-        break
-      end
-      table.remove(t, i)
-    end
-  end
-
   return t
 end
 
@@ -224,12 +249,53 @@ function vim.tbl_filter(func, t)
   return rettab
 end
 
---- Checks if a list-like (vector) table contains `value`.
+--- Checks if a table contains a given value, specified either directly or via
+--- a predicate that is checked for each value.
+---
+--- Example:
+--- <pre>lua
+---  vim.tbl_contains({ 'a', { 'b', 'c' } }, function(v)
+---    return vim.deep_equal(v, { 'b', 'c' })
+---  end, { predicate = true })
+---  -- true
+--- </pre>
+---
+---@see |vim.list_contains()| for checking values in list-like tables
 ---
 ---@param t table Table to check
+---@param value any Value to compare or predicate function reference
+---@param opts (table|nil) Keyword arguments |kwargs|:
+---       - predicate: (boolean) `value` is a function reference to be checked (default false)
+---@return boolean `true` if `t` contains `value`
+function vim.tbl_contains(t, value, opts)
+  vim.validate({ t = { t, 't' }, opts = { opts, 't', true } })
+
+  local pred
+  if opts and opts.predicate then
+    vim.validate({ value = { value, 'c' } })
+    pred = value
+  else
+    pred = function(v)
+      return v == value
+    end
+  end
+
+  for _, v in pairs(t) do
+    if pred(v) then
+      return true
+    end
+  end
+  return false
+end
+
+--- Checks if a list-like table (integer keys without gaps) contains `value`.
+---
+---@see |vim.tbl_contains()| for checking values in general tables
+---
+---@param t table Table to check (must be list-like, not validated)
 ---@param value any Value to compare
 ---@return boolean `true` if `t` contains `value`
-function vim.tbl_contains(t, value)
+function vim.list_contains(t, value)
   vim.validate({ t = { t, 't' } })
 
   for _, v in ipairs(t) do
@@ -251,10 +317,10 @@ function vim.tbl_isempty(t)
   return next(t) == nil
 end
 
---- We only merge empty tables or tables that are not a list
+--- We only merge empty tables or tables that are not an array (indexed by integers)
 ---@private
 local function can_merge(v)
-  return type(v) == 'table' and (vim.tbl_isempty(v) or not vim.tbl_islist(v))
+  return type(v) == 'table' and (vim.tbl_isempty(v) or not vim.tbl_isarray(v))
 end
 
 local function tbl_extend(behavior, deep_extend, ...)
@@ -418,8 +484,8 @@ end
 ---@generic T: table
 ---@param dst T List which will be modified and appended to
 ---@param src table List from which values will be inserted
----@param start (number|nil) Start index on src. Defaults to 1
----@param finish (number|nil) Final index on src. Defaults to `#src`
+---@param start (integer|nil) Start index on src. Defaults to 1
+---@param finish (integer|nil) Final index on src. Defaults to `#src`
 ---@return T dst
 function vim.list_extend(dst, src, start, finish)
   vim.validate({
@@ -485,15 +551,15 @@ function vim.spairs(t)
   end
 end
 
---- Tests if a Lua table can be treated as an array.
+--- Tests if a Lua table can be treated as an array (a table indexed by integers).
 ---
 --- Empty table `{}` is assumed to be an array, unless it was created by
 --- |vim.empty_dict()| or returned as a dict-like |API| or Vimscript result,
 --- for example from |rpcrequest()| or |vim.fn|.
 ---
----@param t table Table
----@return boolean `true` if array-like table, else `false`
-function vim.tbl_islist(t)
+---@param t table
+---@return boolean `true` if array-like table, else `false`.
+function vim.tbl_isarray(t)
   if type(t) ~= 'table' then
     return false
   end
@@ -501,7 +567,8 @@ function vim.tbl_islist(t)
   local count = 0
 
   for k, _ in pairs(t) do
-    if type(k) == 'number' then
+    --- Check if the number k is an integer
+    if type(k) == 'number' and k == math.floor(k) then
       count = count + 1
     else
       return false
@@ -520,6 +587,38 @@ function vim.tbl_islist(t)
   end
 end
 
+--- Tests if a Lua table can be treated as a list (a table indexed by consecutive integers starting from 1).
+---
+--- Empty table `{}` is assumed to be an list, unless it was created by
+--- |vim.empty_dict()| or returned as a dict-like |API| or Vimscript result,
+--- for example from |rpcrequest()| or |vim.fn|.
+---
+---@param t table
+---@return boolean `true` if list-like table, else `false`.
+function vim.tbl_islist(t)
+  if type(t) ~= 'table' then
+    return false
+  end
+
+  local num_elem = vim.tbl_count(t)
+
+  if num_elem == 0 then
+    -- TODO(bfredl): in the future, we will always be inside nvim
+    -- then this check can be deleted.
+    if vim._empty_dict_mt == nil then
+      return nil
+    end
+    return getmetatable(t) ~= vim._empty_dict_mt
+  else
+    for i = 1, num_elem do
+      if t[i] == nil then
+        return false
+      end
+    end
+    return true
+  end
+end
+
 --- Counts the number of non-nil values in table `t`.
 ---
 --- <pre>lua
@@ -529,7 +628,7 @@ end
 ---
 ---@see https://github.com/Tieske/Penlight/blob/master/lua/pl/tablex.lua
 ---@param t table Table
----@return number Number of non-nil values in table
+---@return integer Number of non-nil values in table
 function vim.tbl_count(t)
   vim.validate({ t = { t, 't' } })
 
@@ -544,8 +643,8 @@ end
 ---
 ---@generic T
 ---@param list T[] (list) Table
----@param start number|nil Start range of slice
----@param finish number|nil End range of slice
+---@param start integer|nil Start range of slice
+---@param finish integer|nil End range of slice
 ---@return T[] (list) Copy of table sliced from start to finish (inclusive)
 function vim.list_slice(list, start, finish)
   local new_list = {}
@@ -627,7 +726,7 @@ end
 ---  vim.validate{arg1={{'foo'}, {'table', 'string'}}, arg2={'foo', {'table', 'string'}}}
 ---     --> NOP (success)
 ---
----  vim.validate{arg1={1, {'string', table'}}}
+---  vim.validate{arg1={1, {'string', 'table'}}}
 ---     --> error('arg1: expected string|table, got number')
 ---
 --- </pre>
@@ -768,17 +867,18 @@ end
 --- a.b.c = 1
 --- </pre>
 ---
----@param create function|nil The function called to create a missing value.
+---@param create function?(key:any):any The function called to create a missing value.
 ---@return table Empty table with metamethod
 function vim.defaulttable(create)
-  create = create or vim.defaulttable
+  create = create or function(_)
+    return vim.defaulttable()
+  end
   return setmetatable({}, {
     __index = function(tbl, key)
-      rawset(tbl, key, create())
+      rawset(tbl, key, create(key))
       return rawget(tbl, key)
     end,
   })
 end
 
 return vim
--- vim:sw=2 ts=2 et

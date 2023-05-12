@@ -140,7 +140,6 @@ describe(':terminal scrollback', function()
 
 
     describe('and height decreased by 1', function()
-      if skip(is_os('win')) then return end
       local function will_hide_top_line()
         feed([[<C-\><C-N>]])
         screen:try_resize(screen._width - 2, screen._height - 1)
@@ -347,7 +346,6 @@ end)
 
 describe(':terminal prints more lines than the screen height and exits', function()
   it('will push extra lines to scrollback', function()
-    skip(is_os('win'))
     clear()
     local screen = Screen.new(30, 7)
     screen:attach({rgb=false})
@@ -577,12 +575,12 @@ describe("pending scrollback line handling", function()
 
   it("does not crash after setting 'number' #14891", function()
     exec_lua [[
-      local a = vim.api
-      local buf = a.nvim_create_buf(true, true)
-      local chan = a.nvim_open_term(buf, {})
-      a.nvim_win_set_option(0, "number", true)
-      a.nvim_chan_send(chan, ("a\n"):rep(11) .. "a")
-      a.nvim_win_set_buf(0, buf)
+      local api = vim.api
+      local buf = api.nvim_create_buf(true, true)
+      local chan = api.nvim_open_term(buf, {})
+      api.nvim_win_set_option(0, "number", true)
+      api.nvim_chan_send(chan, ("a\n"):rep(11) .. "a")
+      api.nvim_win_set_buf(0, buf)
     ]]
     screen:expect [[
       {1:  1 }^a                         |
@@ -609,12 +607,11 @@ describe("pending scrollback line handling", function()
   it("does not crash after nvim_buf_call #14891", function()
     skip(is_os('win'))
     exec_lua [[
-      local a = vim.api
-      local bufnr = a.nvim_create_buf(false, true)
-      a.nvim_buf_call(bufnr, function()
+      local bufnr = vim.api.nvim_create_buf(false, true)
+      vim.api.nvim_buf_call(bufnr, function()
         vim.fn.termopen({"echo", ("hi\n"):rep(11)})
       end)
-      a.nvim_win_set_buf(0, bufnr)
+      vim.api.nvim_win_set_buf(0, bufnr)
       vim.cmd("startinsert")
     ]]
     screen:expect [[

@@ -35,7 +35,6 @@
 #include "nvim/option.h"
 #include "nvim/plines.h"
 #include "nvim/pos.h"
-#include "nvim/screen.h"
 #include "nvim/search.h"
 #include "nvim/state.h"
 #include "nvim/statusline.h"
@@ -86,15 +85,11 @@ static int get_mouse_class(char *p)
 /// Move "pos" back to the start of the word it's in.
 static void find_start_of_word(pos_T *pos)
 {
-  char *line;
-  int cclass;
-  int col;
-
-  line = ml_get(pos->lnum);
-  cclass = get_mouse_class(line + pos->col);
+  char *line = ml_get(pos->lnum);
+  int cclass = get_mouse_class(line + pos->col);
 
   while (pos->col > 0) {
-    col = pos->col - 1;
+    int col = pos->col - 1;
     col -= utf_head_off(line, line + col);
     if (get_mouse_class(line + col) != cclass) {
       break;
@@ -109,7 +104,6 @@ static void find_end_of_word(pos_T *pos)
 {
   char *line;
   int cclass;
-  int col;
 
   line = ml_get(pos->lnum);
   if (*p_sel == 'e' && pos->col > 0) {
@@ -118,7 +112,7 @@ static void find_end_of_word(pos_T *pos)
   }
   cclass = get_mouse_class(line + pos->col);
   while (line[pos->col] != NUL) {
-    col = pos->col + utfc_ptr2len(line + pos->col);
+    int col = pos->col + utfc_ptr2len(line + pos->col);
     if (get_mouse_class(line + col) != cclass) {
       if (*p_sel == 'e') {
         pos->col = col;
@@ -218,22 +212,31 @@ static int get_fpos_of_mouse(pos_T *mpos)
   if (wp == NULL) {
     return IN_UNKNOWN;
   }
+  int winrow = row;
+  int wincol = col;
+
+  // compute the position in the buffer line from the posn on the screen
+  bool below_buffer = mouse_comp_pos(wp, &row, &col, &mpos->lnum);
+
+  if (!below_buffer && *wp->w_p_stc != NUL && mouse_col < win_col_off(wp)) {
+    return MOUSE_STATUSCOL;
+  }
 
   // winpos and height may change in win_enter()!
-  if (row + wp->w_winbar_height >= wp->w_height) {  // In (or below) status line
+  if (winrow >= wp->w_height_inner) {  // In (or below) status line
     return IN_STATUS_LINE;
   }
-  if (col >= wp->w_width) {  // In vertical separator line
+
+  if (winrow == -1 && wp->w_winbar_height != 0) {
+    return MOUSE_WINBAR;
+  }
+
+  if (wincol >= wp->w_width_inner) {  // In vertical separator line
     return IN_SEP_LINE;
   }
 
-  if (wp != curwin) {
+  if (wp != curwin || below_buffer) {
     return IN_UNKNOWN;
-  }
-
-  // compute the position in the buffer line from the posn on the screen
-  if (mouse_comp_pos(curwin, &row, &col, &mpos->lnum)) {
-    return IN_STATUS_LINE;  // past bottom
   }
 
   mpos->col = vcol2col(wp, mpos->lnum, col);
@@ -296,20 +299,18 @@ bool do_mouse(oparg_T *oap, int c, int dir, long count, bool fixindent)
   bool in_status_line;          // mouse in status line
   static bool in_tab_line = false;   // mouse clicked in tab line
   bool in_sep_line;             // mouse in vertical separator line
-  int c1, c2;
-  pos_T save_cursor;
+  int c1;
   win_T *old_curwin = curwin;
   static pos_T orig_cursor;
   colnr_T leftcol, rightcol;
   pos_T end_visual;
-  long diff;
   int old_active = VIsual_active;
   int old_mode = VIsual_mode;
   int regname;
 
-  save_cursor = curwin->w_cursor;
+  pos_T save_cursor = curwin->w_cursor;
 
-  for (;;) {
+  while (true) {
     which_button = get_mouse_button(KEY2TERMCAP1(c), &is_click, &is_drag);
     if (is_drag) {
       // If the next character is the same mouse event then use that
@@ -538,6 +539,11 @@ bool do_mouse(oparg_T *oap, int c, int dir, long count, bool fixindent)
   // shift-left button -> right button
   // alt-left button   -> alt-right button
   if (mouse_model_popup()) {
+    pos_T m_pos;
+    int m_pos_flag = get_fpos_of_mouse(&m_pos);
+    if (m_pos_flag & (IN_STATUS_LINE|MOUSE_WINBAR|MOUSE_STATUSCOL)) {
+      goto popupexit;
+    }
     if (which_button == MOUSE_RIGHT
         && !(mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))) {
       if (!is_click) {
@@ -547,17 +553,11 @@ bool do_mouse(oparg_T *oap, int c, int dir, long count, bool fixindent)
       }
       jump_flags = 0;
       if (strcmp(p_mousem, "popup_setpos") == 0) {
-        // First set the cursor position before showing the popup
-        // menu.
+        // First set the cursor position before showing the popup menu.
         if (VIsual_active) {
-          pos_T m_pos;
-          // set MOUSE_MAY_STOP_VIS if we are outside the
-          // selection or the current window (might have false
-          // negative here)
-          if (mouse_row < curwin->w_winrow
-              || mouse_row > (curwin->w_winrow + curwin->w_height)) {
-            jump_flags = MOUSE_MAY_STOP_VIS;
-          } else if (get_fpos_of_mouse(&m_pos) != IN_BUFFER) {
+          // set MOUSE_MAY_STOP_VIS if we are outside the selection
+          // or the current window (might have false negative here)
+          if (m_pos_flag != IN_BUFFER) {
             jump_flags = MOUSE_MAY_STOP_VIS;
           } else {
             if (VIsual_mode == 'V') {
@@ -601,6 +601,7 @@ bool do_mouse(oparg_T *oap, int c, int dir, long count, bool fixindent)
       mod_mask &= ~MOD_MASK_SHIFT;
     }
   }
+popupexit:
 
   if ((State & (MODE_NORMAL | MODE_INSERT))
       && !(mod_mask & (MOD_MASK_SHIFT | MOD_MASK_CTRL))) {
@@ -652,7 +653,7 @@ bool do_mouse(oparg_T *oap, int c, int dir, long count, bool fixindent)
   in_sep_line = (jump_flags & IN_SEP_LINE);
 
   if ((in_winbar || in_status_line || in_statuscol) && is_click) {
-    // Handle click event on window bar or status lin
+    // Handle click event on window bar, status line or status column
     int click_grid = mouse_grid;
     int click_row = mouse_row;
     int click_col = mouse_col;
@@ -680,7 +681,7 @@ bool do_mouse(oparg_T *oap, int c, int dir, long count, bool fixindent)
         call_click_def_func(click_defs, click_col, which_button);
         break;
       default:
-        assert(false && "winbar and statusline only support %@ for clicks");
+        assert(false && "winbar, statusline and statuscolumn only support %@ for clicks");
         break;
       }
     }
@@ -731,6 +732,7 @@ bool do_mouse(oparg_T *oap, int c, int dir, long count, bool fixindent)
   }
 
   if (start_visual.lnum) {              // right click in visual mode
+    long diff;
     // When ALT is pressed make Visual mode blockwise.
     if (mod_mask & MOD_MASK_ALT) {
       VIsual_mode = Ctrl_V;
@@ -800,6 +802,7 @@ bool do_mouse(oparg_T *oap, int c, int dir, long count, bool fixindent)
 
   // Middle mouse click: Put text before cursor.
   if (which_button == MOUSE_MIDDLE) {
+    int c2;
     if (regname == 0 && eval_has_provider("clipboard")) {
       regname = '*';
     }
@@ -888,13 +891,13 @@ bool do_mouse(oparg_T *oap, int c, int dir, long count, bool fixindent)
     // A double click selects a word or a block.
     if ((mod_mask & MOD_MASK_MULTI_CLICK) == MOD_MASK_2CLICK) {
       pos_T *pos = NULL;
-      int gc;
 
       if (is_click) {
         // If the character under the cursor (skipping white space) is
         // not a word character, try finding a match and select a (),
         // {}, [], #if/#endif, etc. block.
         end_visual = curwin->w_cursor;
+        int gc;
         while (gc = gchar_pos(&end_visual), ascii_iswhite(gc)) {
           inc(&end_visual);
         }
@@ -1103,7 +1106,8 @@ retnomove:
     return IN_UNKNOWN;
   }
 
-  on_status_line = (grid == DEFAULT_GRID_HANDLE && row + wp->w_winbar_height >= wp->w_height)
+  bool below_window = grid == DEFAULT_GRID_HANDLE && row + wp->w_winbar_height >= wp->w_height;
+  on_status_line = (below_window)
     ? row + wp->w_winbar_height - wp->w_height + 1 == 1
     : false;
 
@@ -1111,7 +1115,7 @@ retnomove:
     ? wp->w_winbar_height != 0
     : false;
 
-  on_statuscol = !on_status_line && !on_winbar && col < win_col_off(wp)
+  on_statuscol = !below_window && !on_status_line && !on_winbar && col < win_col_off(wp)
     ? *wp->w_p_stc != NUL
     : false;
 
@@ -1150,7 +1154,7 @@ retnomove:
     dragwin = NULL;
 
     // winpos and height may change in win_enter()!
-    if (grid == DEFAULT_GRID_HANDLE && row + wp->w_winbar_height >= wp->w_height) {
+    if (below_window) {
       // In (or below) status line
       status_line_offset = row + wp->w_winbar_height - wp->w_height + 1;
       dragwin = wp;
@@ -1388,16 +1392,14 @@ bool mouse_comp_pos(win_T *win, int *rowp, int *colp, linenr_T *lnump)
 {
   int col = *colp;
   int row = *rowp;
-  linenr_T lnum;
   bool retval = false;
-  int off;
   int count;
 
   if (win->w_p_rl) {
     col = win->w_width_inner - 1 - col;
   }
 
-  lnum = win->w_topline;
+  linenr_T lnum = win->w_topline;
 
   while (row > 0) {
     // Don't include filler lines in "count"
@@ -1408,9 +1410,22 @@ bool mouse_comp_pos(win_T *win, int *rowp, int *colp, linenr_T *lnump)
       } else {
         row -= win_get_fill(win, lnum);
       }
-      count = plines_win_nofill(win, lnum, true);
+      count = plines_win_nofill(win, lnum, false);
     } else {
-      count = plines_win(win, lnum, true);
+      count = plines_win(win, lnum, false);
+    }
+
+    if (win->w_skipcol > 0 && lnum == win->w_topline) {
+      // Adjust for 'smoothscroll' clipping the top screen lines.
+      // A similar formula is used in curs_columns().
+      int width1 = win->w_width_inner - win_col_off(win);
+      int skip_lines = 0;
+      if (win->w_skipcol > width1) {
+        skip_lines = (win->w_skipcol - width1) / (width1 + win_col_off2(win)) + 1;
+      } else if (win->w_skipcol > 0) {
+        skip_lines = 1;
+      }
+      count -= skip_lines;
     }
 
     if (count > row) {
@@ -1429,13 +1444,16 @@ bool mouse_comp_pos(win_T *win, int *rowp, int *colp, linenr_T *lnump)
 
   if (!retval) {
     // Compute the column without wrapping.
-    off = win_col_off(win) - win_col_off2(win);
+    int off = win_col_off(win) - win_col_off2(win);
     if (col < off) {
       col = off;
     }
     col += row * (win->w_width_inner - off);
-    // add skip column (for long wrapping line)
-    col += win->w_skipcol;
+
+    // Add skip column for the topline.
+    if (lnum == win->w_topline) {
+      col += win->w_skipcol;
+    }
   }
 
   if (!win->w_p_wrap) {
@@ -1467,11 +1485,9 @@ win_T *mouse_find_win(int *gridp, int *rowp, int *colp)
     return NULL;
   }
 
-  frame_T *fp;
-
-  fp = topframe;
+  frame_T *fp = topframe;
   *rowp -= firstwin->w_winrow;
-  for (;;) {
+  while (true) {
     if (fp->fr_layout == FR_LEAF) {
       break;
     }
@@ -1577,7 +1593,7 @@ static colnr_T scroll_line_len(linenr_T lnum)
   colnr_T col = 0;
   char *line = ml_get(lnum);
   if (*line != NUL) {
-    for (;;) {
+    while (true) {
       int numchar = win_chartabsize(curwin, line, col);
       MB_PTR_ADV(line);
       if (*line == NUL) {    // don't count the last character
@@ -1648,8 +1664,6 @@ bool mouse_scroll_horiz(int dir)
     return false;
   }
 
-  curwin->w_leftcol = (colnr_T)leftcol;
-
   // When the line of the cursor is too short, move the cursor to the
   // longest visible line.
   if (!virtual_active()
@@ -1658,7 +1672,7 @@ bool mouse_scroll_horiz(int dir)
     curwin->w_cursor.col = 0;
   }
 
-  return leftcol_changed();
+  return set_leftcol(leftcol);
 }
 
 /// Adjusts the clicked column position when 'conceallevel' > 0
@@ -1716,10 +1730,8 @@ static int mouse_adjust_click(win_T *wp, int row, int col)
     ptr_end += utfc_ptr2len(ptr_end);
   }
 
-  int matchid;
   int prev_matchid;
   int nudge = 0;
-  int cwidth = 0;
 
   vcol = offset;
 
@@ -1727,7 +1739,7 @@ static int mouse_adjust_click(win_T *wp, int row, int col)
 #define DECR() nudge--; ptr_end -= utfc_ptr2len((char *)ptr_end)
 
   while (ptr < ptr_end && *ptr != NUL) {
-    cwidth = win_chartabsize(curwin, ptr, vcol);
+    int cwidth = win_chartabsize(curwin, ptr, vcol);
     vcol += cwidth;
     if (cwidth > 1 && *ptr == '\t' && nudge > 0) {
       // A tab will "absorb" any previous adjustments.
@@ -1738,7 +1750,7 @@ static int mouse_adjust_click(win_T *wp, int row, int col)
       }
     }
 
-    matchid = syn_get_concealed_id(wp, lnum, (colnr_T)(ptr - line));
+    int matchid = syn_get_concealed_id(wp, lnum, (colnr_T)(ptr - line));
     if (matchid != 0) {
       if (wp->w_p_cole == 3) {
         INCR();
@@ -1780,9 +1792,7 @@ int mouse_check_fold(void)
   int max_col = Columns;
   int multigrid = ui_has(kUIMultigrid);
 
-  win_T *wp;
-
-  wp = mouse_find_win(&click_grid, &click_row, &click_col);
+  win_T *wp = mouse_find_win(&click_grid, &click_row, &click_col);
   if (wp && multigrid) {
     max_row = wp->w_grid_alloc.rows;
     max_col = wp->w_grid_alloc.cols;

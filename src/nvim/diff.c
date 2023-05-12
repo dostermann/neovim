@@ -22,6 +22,7 @@
 #include "nvim/ascii.h"
 #include "nvim/autocmd.h"
 #include "nvim/buffer.h"
+#include "nvim/bufwrite.h"
 #include "nvim/change.h"
 #include "nvim/charset.h"
 #include "nvim/cursor.h"
@@ -31,6 +32,7 @@
 #include "nvim/ex_cmds.h"
 #include "nvim/ex_cmds_defs.h"
 #include "nvim/ex_docmd.h"
+#include "nvim/extmark.h"
 #include "nvim/extmark_defs.h"
 #include "nvim/fileio.h"
 #include "nvim/fold.h"
@@ -326,7 +328,7 @@ static void diff_mark_adjust_tp(tabpage_T *tp, int idx, linenr_T line1, linenr_T
   diff_T *dp = tp->tp_first_diff;
 
   linenr_T lnum_deleted = line1;  // lnum of remaining deletion
-  for (;;) {
+  while (true) {
     // If the change is after the previous diff block and before the next
     // diff block, thus not touching an existing change, create a new diff
     // block.  Don't do this when ex_diffgetput() is busy.
@@ -586,7 +588,7 @@ static void diff_check_unchanged(tabpage_T *tp, diff_T *dp)
   linenr_T off_org = 0;
   linenr_T off_new = 0;
   int dir = FORWARD;
-  for (;;) {
+  while (true) {
     // Repeat until a line is found which is different or the number of
     // lines has become zero.
     while (dp->df_count[i_org] > 0) {
@@ -1010,7 +1012,7 @@ static int check_external_diff(diffio_T *diffio)
   // May try twice, first with "-a" and then without.
   int io_error = false;
   TriState ok = kFalse;
-  for (;;) {
+  while (true) {
     ok = kFalse;
     FILE *fd = os_fopen(diffio->dio_orig.din_fname, "w");
 
@@ -1040,7 +1042,7 @@ static int check_external_diff(diffio_T *diffio)
         } else {
           char linebuf[LBUFLEN];
 
-          for (;;) {
+          while (true) {
             // For normal diff there must be a line that contains
             // "1c1".  For unified diff "@@ -1 +1 @@".
             if (vim_fgets(linebuf, LBUFLEN, fd)) {
@@ -1558,7 +1560,7 @@ static bool extract_hunk_internal(diffout_T *dout, diffhunk_T *hunk, int *line_i
 // Extract hunk by parsing the diff output from file and calculate the diffstyle.
 static bool extract_hunk(FILE *fd, diffhunk_T *hunk, diffstyle_T *diffstyle)
 {
-  for (;;) {
+  while (true) {
     char line[LBUFLEN];  // only need to hold the diff line
     if (vim_fgets(line, LBUFLEN, fd)) {
       return true;  // end of file
@@ -1745,7 +1747,7 @@ static void diff_read(int idx_orig, int idx_new, diffio_T *dio)
     }
   }
 
-  for (;;) {
+  while (true) {
     diffhunk_T hunk = { 0 };
     bool eof = dio->dio_internal
                ? extract_hunk_internal(dout, &hunk, &line_idx)
@@ -2652,8 +2654,7 @@ bool diff_find_change(win_T *wp, linenr_T lnum, int *startp, int *endp)
   bool added = true;
 
   linenr_T off = lnum - dp->df_lnum[idx];
-  int i;
-  for (i = 0; i < DB_COUNT; i++) {
+  for (int i = 0; i < DB_COUNT; i++) {
     if ((curtab->tp_diffbuf[i] != NULL) && (i != idx)) {
       // Skip lines that are not in the other change (filler lines).
       if (off >= dp->df_count[i]) {
@@ -2951,7 +2952,7 @@ void ex_diffgetput(exarg_T *eap)
   }
 
   const int idx_from = eap->cmdidx == CMD_diffget ? idx_other : idx_cur;
-  const int idx_to   = eap->cmdidx == CMD_diffget ? idx_cur   : idx_other;
+  const int idx_to   = eap->cmdidx == CMD_diffget ? idx_cur : idx_other;
 
   // May give the warning for a changed buffer here, which can trigger the
   // FileChangedRO autocommand, which may do nasty things and mess
@@ -3103,6 +3104,9 @@ static void diffgetput(const int addr_count, const int idx_cur, const int idx_fr
         if (buf_empty && (curbuf->b_ml.ml_line_count == 2)) {
           // Added the first line into an empty buffer, need to
           // delete the dummy empty line.
+          // This has a side effect of incrementing curbuf->deleted_bytes,
+          // which results in inaccurate reporting of the byte count of
+          // previous contents in buffer-update events.
           buf_empty = false;
           ml_delete((linenr_T)2, false);
         }
@@ -3133,7 +3137,7 @@ static void diffgetput(const int addr_count, const int idx_cur, const int idx_fr
 
       if (added != 0) {
         // Adjust marks.  This will change the following entries!
-        mark_adjust(lnum, lnum + count - 1, (long)MAXLNUM, added, kExtmarkUndo);
+        mark_adjust(lnum, lnum + count - 1, (long)MAXLNUM, added, kExtmarkNOOP);
         if (curwin->w_cursor.lnum >= lnum) {
           // Adjust the cursor position if it's in/after the changed
           // lines.
@@ -3144,6 +3148,7 @@ static void diffgetput(const int addr_count, const int idx_cur, const int idx_fr
           }
         }
       }
+      extmark_adjust(curbuf, lnum, lnum + count - 1, (long)MAXLNUM, added, kExtmarkUndo);
       changed_lines(lnum, 0, lnum + count, added, true);
 
       if (did_free) {
@@ -3409,7 +3414,7 @@ static int parse_diff_ed(char *line, diffhunk_T *hunk)
   linenr_T f1 = getdigits_int32(&p, true, 0);
   if (*p == ',') {
     p++;
-    l1 = getdigits(&p, true, 0);
+    l1 = getdigits_long(&p, true, 0);
   } else {
     l1 = f1;
   }
@@ -3417,10 +3422,10 @@ static int parse_diff_ed(char *line, diffhunk_T *hunk)
     return FAIL;        // invalid diff format
   }
   int difftype = (uint8_t)(*p++);
-  long f2 = getdigits(&p, true, 0);
+  long f2 = getdigits_long(&p, true, 0);
   if (*p == ',') {
     p++;
-    l2 = getdigits(&p, true, 0);
+    l2 = getdigits_long(&p, true, 0);
   } else {
     l2 = f2;
   }
@@ -3458,18 +3463,18 @@ static int parse_diff_unified(char *line, diffhunk_T *hunk)
     long oldcount;
     long newline;
     long newcount;
-    long oldline = getdigits(&p, true, 0);
+    long oldline = getdigits_long(&p, true, 0);
     if (*p == ',') {
       p++;
-      oldcount = getdigits(&p, true, 0);
+      oldcount = getdigits_long(&p, true, 0);
     } else {
       oldcount = 1;
     }
     if (*p++ == ' ' && *p++ == '+') {
-      newline = getdigits(&p, true, 0);
+      newline = getdigits_long(&p, true, 0);
       if (*p == ',') {
         p++;
-        newcount = getdigits(&p, true, 0);
+        newcount = getdigits_long(&p, true, 0);
       } else {
         newcount = 1;
       }

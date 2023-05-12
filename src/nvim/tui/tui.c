@@ -34,15 +34,17 @@
 #include "nvim/msgpack_rpc/channel.h"
 #include "nvim/os/input.h"
 #include "nvim/os/os.h"
-#include "nvim/ui_client.h"
-#ifdef MSWIN
-# include "nvim/os/os_win_console.h"
-#endif
 #include "nvim/tui/input.h"
 #include "nvim/tui/terminfo.h"
 #include "nvim/tui/tui.h"
 #include "nvim/ugrid.h"
 #include "nvim/ui.h"
+#include "nvim/ui_client.h"
+
+#ifdef MSWIN
+# include "nvim/os/os_win_console.h"
+# include "nvim/os/tty.h"
+#endif
 
 // Space reserved in two output buffers to make the cursor normal or invisible
 // when flushing. No existing terminal will require 32 bytes to do that.
@@ -58,27 +60,14 @@
 #define LINUXSET0C "\x1b[?0c"
 #define LINUXSET1C "\x1b[?1c"
 
-#ifdef NVIM_UNIBI_HAS_VAR_FROM
-# define UNIBI_SET_NUM_VAR(var, num) \
+#define UNIBI_SET_NUM_VAR(var, num) \
   do { \
     (var) = unibi_var_from_num((num)); \
   } while (0)
-# define UNIBI_SET_STR_VAR(var, str) \
+#define UNIBI_SET_STR_VAR(var, str) \
   do { \
     (var) = unibi_var_from_str((str)); \
   } while (0)
-#else
-# define UNIBI_SET_NUM_VAR(var, num) \
-  do { \
-    (var).p = NULL; \
-    (var).i = (num); \
-  } while (0)
-# define UNIBI_SET_STR_VAR(var, str) \
-  do { \
-    (var).i = INT_MIN; \
-    (var).p = str; \
-  } while (0)
-#endif
 
 typedef struct {
   int top, bot, left, right;
@@ -165,7 +154,7 @@ static bool cursor_style_enabled = false;
 # include "tui/tui.c.generated.h"
 #endif
 
-TUIData *tui_start(int *width, int *height, char **term)
+void tui_start(TUIData **tui_p, int *width, int *height, char **term)
 {
   TUIData *tui = xcalloc(1, sizeof(TUIData));
   tui->is_starting = true;
@@ -188,11 +177,11 @@ TUIData *tui_start(int *width, int *height, char **term)
   uv_timer_start(&tui->startup_delay_timer, after_startup_cb,
                  100, 0);
 
+  *tui_p = tui;
   loop_poll_events(&main_loop, 1);
   *width = tui->width;
   *height = tui->height;
   *term = tui->term;
-  return tui;
 }
 
 void tui_enable_extkeys(TUIData *tui)
@@ -220,7 +209,7 @@ void tui_enable_extkeys(TUIData *tui)
   unibi_out_ext(tui, tui->unibi_ext.enable_extended_keys);
 }
 
-static size_t unibi_pre_fmt_str(TUIData *tui, unsigned int unibi_index, char *buf, size_t len)
+static size_t unibi_pre_fmt_str(TUIData *tui, unsigned unibi_index, char *buf, size_t len)
 {
   const char *str = unibi_get_str(tui->ut, unibi_index);
   if (!str) {
@@ -357,12 +346,7 @@ static void terminfo_start(TUIData *tui)
     if (ret) {
       ELOG("uv_tty_init failed: %s", uv_strerror(ret));
     }
-#ifdef MSWIN
-    ret = uv_tty_set_mode(&tui->output_handle.tty, UV_TTY_MODE_RAW);
-    if (ret) {
-      ELOG("uv_tty_set_mode failed: %s", uv_strerror(ret));
-    }
-#else
+#ifndef MSWIN
     int retry_count = 10;
     // A signal may cause uv_tty_set_mode() to fail (e.g., SIGCONT). Retry a
     // few times. #12322
@@ -453,14 +437,13 @@ static void tui_terminal_stop(TUIData *tui)
   }
   tinput_stop(&tui->input);
   signal_watcher_stop(&tui->winch_handle);
+  // Position the cursor on the last screen line, below all the text
+  cursor_goto(tui, tui->height - 1, 0);
   terminfo_stop(tui);
 }
 
 void tui_stop(TUIData *tui)
 {
-  if (tui->stopped) {
-    return;
-  }
   tui_terminal_stop(tui);
   stream_set_blocking(tui->input.in_fd, true);   // normalize stream (#2598)
   tinput_destroy(&tui->input);
@@ -470,7 +453,7 @@ void tui_stop(TUIData *tui)
 }
 
 /// Returns true if UI `ui` is stopped.
-static bool tui_is_stopped(TUIData *tui)
+bool tui_is_stopped(TUIData *tui)
 {
   return tui->stopped;
 }
@@ -994,7 +977,7 @@ void tui_grid_clear(TUIData *tui, Integer g)
   UGrid *grid = &tui->grid;
   ugrid_clear(grid);
   kv_size(tui->invalid_regions) = 0;
-  clear_region(tui, 0, grid->height, 0, grid->width, 0);
+  clear_region(tui, 0, tui->height, 0, tui->width, 0);
 }
 
 void tui_grid_cursor_goto(TUIData *tui, Integer grid, Integer row, Integer col)
@@ -1115,8 +1098,8 @@ void tui_set_mode(TUIData *tui, ModeShape mode)
       // Hopefully the user's default cursor color is inverse.
       unibi_out_ext(tui, tui->unibi_ext.reset_cursor_color);
     } else {
+      char hexbuf[8];
       if (tui->set_cursor_color_as_str) {
-        char hexbuf[8];
         snprintf(hexbuf, 7 + 1, "#%06x", aep.rgb_bg_color);
         UNIBI_SET_STR_VAR(tui->params[0], hexbuf);
       } else {
@@ -1153,7 +1136,7 @@ void tui_mode_change(TUIData *tui, String mode, Integer mode_idx)
   // If stdin is not a TTY, the LHS of pipe may change the state of the TTY
   // after calling uv_tty_set_mode. So, set the mode of the TTY again here.
   // #13073
-  if (tui->is_starting && tui->input.in_fd == STDERR_FILENO) {
+  if (tui->is_starting && !stdin_isatty) {
     int ret = uv_tty_set_mode(&tui->output_handle.tty, UV_TTY_MODE_NORMAL);
     if (ret) {
       ELOG("uv_tty_set_mode failed: %s", uv_strerror(ret));
@@ -1388,7 +1371,8 @@ void tui_set_title(TUIData *tui, String title)
 }
 
 void tui_set_icon(TUIData *tui, String icon)
-{}
+{
+}
 
 void tui_screenshot(TUIData *tui, String path)
 {
@@ -1545,12 +1529,11 @@ void tui_guess_size(TUIData *tui)
     height = DFLT_ROWS;
   }
 
-  if (tui->width != width || tui->height != height) {
-    tui->width = width;
-    tui->height = height;
+  tui->width = width;
+  tui->height = height;
 
-    ui_client_set_size(width, height);
-  }
+  // Redraw on SIGWINCH event if size didn't change. #23411
+  ui_client_set_size(width, height);
 }
 
 static void unibi_goto(TUIData *tui, int row, int col)
@@ -1635,7 +1618,7 @@ static void pad(void *ctx, size_t delay, int scale FUNC_ATTR_UNUSED, int force)
   }
 
   flush_buf(tui);
-  uv_sleep((unsigned int)(delay/10));
+  uv_sleep((unsigned)(delay/10));
 }
 
 static void unibi_set_if_empty(unibi_term *ut, enum unibi_string str, const char *val)

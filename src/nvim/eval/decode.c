@@ -148,7 +148,7 @@ static inline int json_decoder_pop(ValuesStackItem obj, ValuesStack *const stack
       assert(!(key.is_special_string
                || key.val.vval.v_string == NULL
                || *key.val.vval.v_string == NUL));
-      dictitem_T *const obj_di = tv_dict_item_alloc((const char *)key.val.vval.v_string);
+      dictitem_T *const obj_di = tv_dict_item_alloc(key.val.vval.v_string);
       tv_clear(&key.val);
       if (tv_dict_add(last_container.container.vval.v_dict, obj_di)
           == FAIL) {
@@ -179,8 +179,7 @@ static inline int json_decoder_pop(ValuesStackItem obj, ValuesStack *const stack
         && (obj.is_special_string
             || obj.val.vval.v_string == NULL
             || *obj.val.vval.v_string == NUL
-            || tv_dict_find(last_container.container.vval.v_dict,
-                            (const char *)obj.val.vval.v_string, -1))) {
+            || tv_dict_find(last_container.container.vval.v_dict, obj.val.vval.v_string, -1))) {
       tv_clear(&obj.val);
 
       // Restart
@@ -439,7 +438,7 @@ static inline int parse_json_string(const char *const buf, const size_t buf_len,
         t += 4;
         uvarnumber_T ch;
         vim_str2nr(ubuf, NULL, NULL,
-                   STR2NR_HEX | STR2NR_FORCE, NULL, &ch, 4, true);
+                   STR2NR_HEX | STR2NR_FORCE, NULL, &ch, 4, true, NULL);
         if (ch == 0) {
           hasnul = true;
         }
@@ -608,7 +607,7 @@ parse_json_number_check:
     // Convert integer
     varnumber_T nr;
     int num_len;
-    vim_str2nr(s, NULL, &num_len, 0, &nr, NULL, (int)(p - s), true);
+    vim_str2nr(s, NULL, &num_len, 0, &nr, NULL, (int)(p - s), true, NULL);
     if ((int)exp_num_len != num_len) {
       semsg(_("E685: internal error: while converting number \"%.*s\" "
               "to integer vim_str2nr consumed %i bytes in place of %zu"),
@@ -987,12 +986,8 @@ int msgpack_to_vim(const msgpack_object mobj, typval_T *const rettv)
       tv_list_append_number(list, (varnumber_T)(n & 0x7FFFFFFF));
     }
     break;
-#ifdef NVIM_MSGPACK_HAS_FLOAT32
   case MSGPACK_OBJECT_FLOAT32:
   case MSGPACK_OBJECT_FLOAT64:
-#else
-  case MSGPACK_OBJECT_FLOAT:
-#endif
     *rettv = (typval_T) {
       .v_type = VAR_FLOAT,
       .v_lock = VAR_UNLOCKED,

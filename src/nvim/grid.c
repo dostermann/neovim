@@ -22,7 +22,7 @@
 #include "nvim/highlight.h"
 #include "nvim/log.h"
 #include "nvim/message.h"
-#include "nvim/option_defs.h"
+#include "nvim/option.h"
 #include "nvim/types.h"
 #include "nvim/ui.h"
 #include "nvim/vim.h"
@@ -158,9 +158,9 @@ void grid_getbytes(ScreenGrid *grid, int row, int col, char *bytes, int *attrp)
 /// attributes 'attr', and update chars[] and attrs[].
 /// Note: only outputs within one row, message is truncated at grid boundary!
 /// Note: if grid, row and/or col is invalid, nothing is done.
-void grid_puts(ScreenGrid *grid, char *text, int row, int col, int attr)
+int grid_puts(ScreenGrid *grid, char *text, int row, int col, int attr)
 {
-  grid_puts_len(grid, text, -1, row, col, attr);
+  return grid_puts_len(grid, text, -1, row, col, attr);
 }
 
 static ScreenGrid *put_dirty_grid = NULL;
@@ -197,22 +197,18 @@ void grid_put_schar(ScreenGrid *grid, int row, int col, char *schar, int attr)
 
 /// like grid_puts(), but output "text[len]".  When "len" is -1 output up to
 /// a NUL.
-void grid_puts_len(ScreenGrid *grid, char *text, int textlen, int row, int col, int attr)
+int grid_puts_len(ScreenGrid *grid, const char *text, int textlen, int row, int col, int attr)
 {
   size_t off;
-  char *ptr = text;
+  const char *ptr = text;
   int len = textlen;
   int c;
   size_t max_off;
-  int mbyte_blen = 1;
-  int mbyte_cells = 1;
-  int u8c = 0;
   int u8cc[MAX_MCO];
   bool clear_next_cell = false;
   int prev_c = 0;  // previous Arabic character
   int pc, nc, nc1;
   int pcc[MAX_MCO];
-  int need_redraw;
   bool do_flush = false;
 
   grid_adjust(&grid, &row, &col);
@@ -222,7 +218,7 @@ void grid_puts_len(ScreenGrid *grid, char *text, int textlen, int row, int col, 
   if (grid->chars == NULL
       || row >= grid->rows || row < 0
       || col >= grid->cols || col < 0) {
-    return;
+    return 0;
   }
 
   if (put_dirty_row == -1) {
@@ -234,6 +230,7 @@ void grid_puts_len(ScreenGrid *grid, char *text, int textlen, int row, int col, 
     }
   }
   off = grid->line_offset[row] + (size_t)col;
+  int start_col = col;
 
   // When drawing over the right half of a double-wide char clear out the
   // left half.  Only needed in a terminal.
@@ -249,13 +246,19 @@ void grid_puts_len(ScreenGrid *grid, char *text, int textlen, int row, int col, 
          && *ptr != NUL) {
     c = (unsigned char)(*ptr);
     // check if this is the first byte of a multibyte
-    mbyte_blen = len > 0
+    int mbyte_blen = len > 0
       ? utfc_ptr2len_len(ptr, (int)((text + len) - ptr))
       : utfc_ptr2len(ptr);
-    u8c = len >= 0
+    int u8c = len >= 0
       ? utfc_ptr2char_len(ptr, u8cc, (int)((text + len) - ptr))
       : utfc_ptr2char(ptr, u8cc);
-    mbyte_cells = utf_char2cells(u8c);
+    int mbyte_cells = utf_char2cells(u8c);
+    if (mbyte_cells > 2) {
+      mbyte_cells = 1;
+      u8c = 0xFFFD;
+      u8cc[0] = 0;
+    }
+
     if (p_arshape && !p_tbidi && ARABIC_CHAR(u8c)) {
       // Do Arabic shaping.
       if (len >= 0 && (int)(ptr - text) + mbyte_blen >= len) {
@@ -287,11 +290,11 @@ void grid_puts_len(ScreenGrid *grid, char *text, int textlen, int row, int col, 
     schar_T buf;
     schar_from_cc(buf, u8c, u8cc);
 
-    need_redraw = schar_cmp(grid->chars[off], buf)
-                  || (mbyte_cells == 2 && grid->chars[off + 1][0] != 0)
-                  || grid->attrs[off] != attr
-                  || exmode_active
-                  || rdb_flags & RDB_NODELTA;
+    int need_redraw = schar_cmp(grid->chars[off], buf)
+                      || (mbyte_cells == 2 && grid->chars[off + 1][0] != 0)
+                      || grid->attrs[off] != attr
+                      || exmode_active
+                      || rdb_flags & RDB_NODELTA;
 
     if (need_redraw) {
       // When at the end of the text and overwriting a two-cell
@@ -340,6 +343,7 @@ void grid_puts_len(ScreenGrid *grid, char *text, int textlen, int row, int col, 
   if (do_flush) {
     grid_puts_line_flush(true);
   }
+  return col - start_col;
 }
 
 /// End a group of grid_puts_len calls and send the screen buffer to the UI
@@ -497,9 +501,9 @@ void grid_put_linebuf(ScreenGrid *grid, int row, int coloff, int endcol, int cle
   size_t max_off_from;
   size_t max_off_to;
   int col = 0;
-  bool redraw_this;                         // Does character need redraw?
   bool redraw_next;                         // redraw_this for next character
   bool clear_next = false;
+  bool topline = row == 0;
   int char_cells;                           // 1: normal char
                                             // 2: occupies two display cells
   int start_dirty = -1, end_dirty = 0;
@@ -526,6 +530,30 @@ void grid_put_linebuf(ScreenGrid *grid, int row, int coloff, int endcol, int cle
   max_off_from = linebuf_size;
   max_off_to = grid->line_offset[row] + (size_t)grid->cols;
 
+  // Take care of putting "<<<" on the first line for 'smoothscroll'.
+  if (topline && wp->w_skipcol > 0
+      // do not overwrite the 'showbreak' text with "<<<"
+      && *get_showbreak_value(wp) == NUL
+      // do not overwrite the 'listchars' "precedes" text with "<<<"
+      && !(wp->w_p_list && wp->w_p_lcs_chars.prec != 0)) {
+    int off = 0;
+    int skip = 0;
+    if (wp->w_p_nu && wp->w_p_rnu) {
+      // do not overwrite the line number, change "123 text" to
+      // "123>>>xt".
+      while (skip < wp->w_width_inner && ascii_isdigit(*linebuf_char[off])) {
+        off++;
+        skip++;
+      }
+    }
+
+    for (int i = 0; i < 3 && i + skip < wp->w_width_inner; i++) {
+      schar_from_ascii(linebuf_char[off], '<');
+      linebuf_attr[off] = HL_ATTR(HLF_AT);
+      off++;
+    }
+  }
+
   if (rlflag) {
     // Clear rest first, because it's left of the text.
     if (clear_width > 0) {
@@ -546,9 +574,9 @@ void grid_put_linebuf(ScreenGrid *grid, int row, int coloff, int endcol, int cle
   }
 
   if (bg_attr) {
+    assert(off_from == (size_t)col);
     for (int c = col; c < endcol; c++) {
-      linebuf_attr[off_from + (size_t)c] =
-        hl_combine_attr(bg_attr, linebuf_attr[off_from + (size_t)c]);
+      linebuf_attr[c] = hl_combine_attr(bg_attr, linebuf_attr[c]);
     }
   }
 
@@ -559,7 +587,7 @@ void grid_put_linebuf(ScreenGrid *grid, int row, int coloff, int endcol, int cle
     if (col + 1 < endcol) {
       char_cells = line_off2cells(linebuf_char, off_from, max_off_from);
     }
-    redraw_this = redraw_next;
+    bool redraw_this = redraw_next;  // Does character need redraw?
     redraw_next = grid_char_needs_redraw(grid, off_from + (size_t)char_cells,
                                          off_to + (size_t)char_cells,
                                          endcol - col - char_cells);
@@ -654,22 +682,22 @@ void grid_put_linebuf(ScreenGrid *grid, int row, int coloff, int endcol, int cle
 void grid_alloc(ScreenGrid *grid, int rows, int columns, bool copy, bool valid)
 {
   int new_row;
-  ScreenGrid new = *grid;
+  ScreenGrid ngrid = *grid;
   assert(rows >= 0 && columns >= 0);
   size_t ncells = (size_t)rows * (size_t)columns;
-  new.chars = xmalloc(ncells * sizeof(schar_T));
-  new.attrs = xmalloc(ncells * sizeof(sattr_T));
-  new.line_offset = xmalloc((size_t)rows * sizeof(*new.line_offset));
-  new.line_wraps = xmalloc((size_t)rows * sizeof(*new.line_wraps));
+  ngrid.chars = xmalloc(ncells * sizeof(schar_T));
+  ngrid.attrs = xmalloc(ncells * sizeof(sattr_T));
+  ngrid.line_offset = xmalloc((size_t)rows * sizeof(*ngrid.line_offset));
+  ngrid.line_wraps = xmalloc((size_t)rows * sizeof(*ngrid.line_wraps));
 
-  new.rows = rows;
-  new.cols = columns;
+  ngrid.rows = rows;
+  ngrid.cols = columns;
 
-  for (new_row = 0; new_row < new.rows; new_row++) {
-    new.line_offset[new_row] = (size_t)new_row * (size_t)new.cols;
-    new.line_wraps[new_row] = false;
+  for (new_row = 0; new_row < ngrid.rows; new_row++) {
+    ngrid.line_offset[new_row] = (size_t)new_row * (size_t)ngrid.cols;
+    ngrid.line_wraps[new_row] = false;
 
-    grid_clear_line(&new, new.line_offset[new_row], columns, valid);
+    grid_clear_line(&ngrid, ngrid.line_offset[new_row], columns, valid);
 
     if (copy) {
       // If the screen is not going to be cleared, copy as much as
@@ -677,18 +705,18 @@ void grid_alloc(ScreenGrid *grid, int rows, int columns, bool copy, bool valid)
       // (used when resizing the window at the "--more--" prompt or when
       // executing an external command, for the GUI).
       if (new_row < grid->rows && grid->chars != NULL) {
-        int len = MIN(grid->cols, new.cols);
-        memmove(new.chars + new.line_offset[new_row],
+        int len = MIN(grid->cols, ngrid.cols);
+        memmove(ngrid.chars + ngrid.line_offset[new_row],
                 grid->chars + grid->line_offset[new_row],
                 (size_t)len * sizeof(schar_T));
-        memmove(new.attrs + new.line_offset[new_row],
+        memmove(ngrid.attrs + ngrid.line_offset[new_row],
                 grid->attrs + grid->line_offset[new_row],
                 (size_t)len * sizeof(sattr_T));
       }
     }
   }
   grid_free(grid);
-  *grid = new;
+  *grid = ngrid;
 
   // Share a single scratch buffer for all grids, by
   // ensuring it is as wide as the widest grid.
@@ -810,7 +838,6 @@ void grid_assign_handle(ScreenGrid *grid)
 /// 'row', 'col' and 'end' are relative to the start of the region.
 void grid_ins_lines(ScreenGrid *grid, int row, int line_count, int end, int col, int width)
 {
-  int i;
   int j;
   unsigned temp;
 
@@ -825,7 +852,7 @@ void grid_ins_lines(ScreenGrid *grid, int row, int line_count, int end, int col,
 
   // Shift line_offset[] line_count down to reflect the inserted lines.
   // Clear the inserted lines.
-  for (i = 0; i < line_count; i++) {
+  for (int i = 0; i < line_count; i++) {
     if (width != grid->cols) {
       // need to copy part of a line
       j = end - 1 - i;
@@ -860,7 +887,6 @@ void grid_ins_lines(ScreenGrid *grid, int row, int line_count, int end, int col,
 void grid_del_lines(ScreenGrid *grid, int row, int line_count, int end, int col, int width)
 {
   int j;
-  int i;
   unsigned temp;
 
   int row_off = 0;
@@ -874,7 +900,7 @@ void grid_del_lines(ScreenGrid *grid, int row, int line_count, int end, int col,
 
   // Now shift line_offset[] line_count up to reflect the deleted lines.
   // Clear the inserted lines.
-  for (i = 0; i < line_count; i++) {
+  for (int i = 0; i < line_count; i++) {
     if (width != grid->cols) {
       // need to copy part of a line
       j = row + i;

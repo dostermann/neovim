@@ -812,8 +812,6 @@ Short explanation of each option:		*option-list*
 'operatorfunc'	  'opfunc'  function to be called for |g@| operator
 'packpath'	  'pp'      list of directories used for packages
 'paragraphs'	  'para'    nroff macros that separate paragraphs
-'paste'			    allow pasting text
-'pastetoggle'	  'pt'	    key code that causes 'paste' to toggle
 'patchexpr'	  'pex'     expression used to patch a file
 'patchmode'	  'pm'	    keep the oldest version of a file
 'path'		  'pa'	    list of directories searched with "gf" et.al.
@@ -872,6 +870,7 @@ Short explanation of each option:		*option-list*
 'smartcase'	  'scs'     no ignore case when pattern has uppercase
 'smartindent'	  'si'	    smart autoindenting for C programs
 'smarttab'	  'sta'     use 'shiftwidth' when inserting <Tab>
+'smoothscroll'	  'sms'     scroll by screen lines when 'wrap' is set
 'softtabstop'	  'sts'     number of spaces that <Tab> uses while editing
 'spell'			    enable spell checking
 'spellcapcheck'   'spc'     pattern to locate end of a sentence

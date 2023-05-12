@@ -1,49 +1,53 @@
 add_library(main_lib INTERFACE)
 add_executable(nvim main.c)
 
-add_library(libuv_lib INTERFACE)
-find_package(LibUV 1.28.0 REQUIRED)
-target_include_directories(libuv_lib SYSTEM BEFORE INTERFACE ${LIBUV_INCLUDE_DIRS})
-target_link_libraries(libuv_lib INTERFACE ${LIBUV_LIBRARIES})
+add_library(libuv INTERFACE)
+find_package(libuv CONFIG)
+if(TARGET libuv::uv_a)
+  target_link_libraries(libuv INTERFACE libuv::uv_a)
+  mark_as_advanced(libuv_DIR)
+else()
+  # Fall back to find module for older libuv versions that don't provide config file
+  find_package(Libuv 1.28.0 REQUIRED MODULE)
+  target_include_directories(libuv SYSTEM BEFORE INTERFACE ${LIBUV_INCLUDE_DIRS})
+  target_link_libraries(libuv INTERFACE ${LIBUV_LIBRARIES})
+endif()
 
-find_package(Msgpack 1.0.0 REQUIRED)
-target_include_directories(main_lib SYSTEM BEFORE INTERFACE ${MSGPACK_INCLUDE_DIRS})
-target_link_libraries(main_lib INTERFACE ${MSGPACK_LIBRARIES})
+add_library(nlua0 MODULE)
+if(WIN32)
+  target_compile_definitions(nlua0 PUBLIC LUA_BUILD_AS_DLL LUA_LIB)
+  set_target_properties(nlua0 PROPERTIES ENABLE_EXPORTS TRUE)
+elseif(APPLE)
+  set_target_properties(nlua0 PROPERTIES LINK_FLAGS "-undefined dynamic_lookup")
+endif()
 
-find_package(LibLUV 1.43.0 REQUIRED)
-target_include_directories(main_lib SYSTEM BEFORE INTERFACE ${LIBLUV_INCLUDE_DIRS})
-# Use "luv" as imported library, to work around CMake using "-lluv" for
-# "luv.so".  #10407
-add_library(luv UNKNOWN IMPORTED)
-set_target_properties(luv PROPERTIES IMPORTED_LOCATION ${LIBLUV_LIBRARIES})
-target_link_libraries(main_lib INTERFACE luv)
-
-find_package(TreeSitter REQUIRED)
-target_include_directories(main_lib SYSTEM BEFORE INTERFACE ${TreeSitter_INCLUDE_DIRS})
-target_link_libraries(main_lib INTERFACE ${TreeSitter_LIBRARIES})
-
-find_package(unibilium 2.0 REQUIRED)
-target_link_libraries(main_lib INTERFACE unibilium)
-
-find_package(LibTermkey 0.22 REQUIRED)
-target_include_directories(main_lib SYSTEM BEFORE INTERFACE ${LIBTERMKEY_INCLUDE_DIRS})
-target_link_libraries(main_lib INTERFACE ${LIBTERMKEY_LIBRARIES})
-
-find_package(libvterm 0.3 REQUIRED)
-target_link_libraries(main_lib INTERFACE libvterm)
+find_package(Libluv 1.43.0 REQUIRED)
+target_include_directories(main_lib SYSTEM BEFORE INTERFACE ${LIBLUV_INCLUDE_DIR})
+target_link_libraries(main_lib INTERFACE ${LIBLUV_LIBRARY})
 
 find_package(Iconv REQUIRED)
-target_include_directories(main_lib SYSTEM BEFORE INTERFACE ${Iconv_INCLUDE_DIRS})
-target_link_libraries(main_lib INTERFACE ${Iconv_LIBRARIES})
+find_package(Lpeg REQUIRED)
+find_package(Libtermkey 0.22 REQUIRED)
+find_package(Libvterm 0.3 REQUIRED)
+find_package(Msgpack 1.0.0 REQUIRED)
+find_package(Treesitter 0.20.8 REQUIRED)
+find_package(Unibilium 2.0 REQUIRED)
 
-option(ENABLE_LIBINTL "enable libintl" ON)
-if(ENABLE_LIBINTL)
-  # LibIntl (not Intl) selects our FindLibIntl.cmake script. #8464
-  find_package(LibIntl REQUIRED)
-  target_include_directories(main_lib SYSTEM BEFORE INTERFACE ${LibIntl_INCLUDE_DIRS})
-  if (LibIntl_FOUND)
-    target_link_libraries(main_lib INTERFACE ${LibIntl_LIBRARY})
-  endif()
+target_link_libraries(main_lib INTERFACE
+  iconv
+  libtermkey
+  libvterm
+  msgpack
+  treesitter
+  unibilium
+  lpeg)
+target_link_libraries(nlua0 PUBLIC lpeg)
+
+# Libintl (not Intl) selects our FindLibintl.cmake script. #8464
+find_package(Libintl REQUIRED)
+target_include_directories(main_lib SYSTEM BEFORE INTERFACE ${LIBINTL_INCLUDE_DIR})
+if (LIBINTL_LIBRARY)
+  target_link_libraries(main_lib INTERFACE ${LIBINTL_LIBRARY})
 endif()
 
 # The unit test lib requires LuaJIT; it will be skipped if LuaJIT is missing.
@@ -51,13 +55,18 @@ option(PREFER_LUA "Prefer Lua over LuaJIT in the nvim executable." OFF)
 if(PREFER_LUA)
   find_package(Lua 5.1 EXACT REQUIRED)
   target_include_directories(main_lib SYSTEM BEFORE INTERFACE ${LUA_INCLUDE_DIR})
+  target_include_directories(nlua0 SYSTEM BEFORE PUBLIC ${LUA_INCLUDE_DIR})
   target_link_libraries(main_lib INTERFACE ${LUA_LIBRARIES})
   # Passive (not REQUIRED): if LUAJIT_FOUND is not set, fixtures for unittests is skipped.
-  find_package(LuaJit)
+  find_package(Luajit)
 else()
-  find_package(LuaJit REQUIRED)
+  find_package(Luajit REQUIRED)
   target_include_directories(main_lib SYSTEM BEFORE INTERFACE ${LUAJIT_INCLUDE_DIRS})
   target_link_libraries(main_lib INTERFACE ${LUAJIT_LIBRARIES})
+  target_include_directories(nlua0 SYSTEM BEFORE PUBLIC ${LUAJIT_INCLUDE_DIRS})
+  if(WIN32)
+    target_link_libraries(nlua0 PUBLIC ${LUAJIT_LIBRARIES})
+  endif()
 endif()
 
 option(ENABLE_IWYU "Run include-what-you-use with the compiler." OFF)
@@ -78,8 +87,7 @@ if(ENABLE_IWYU)
 endif()
 
 if(MSVC)
-  # TODO(dundargoc): bump warning level
-  target_compile_options(main_lib INTERFACE -W2)
+  target_compile_options(main_lib INTERFACE -W3)
 
   # Disable warnings that give too many false positives.
   target_compile_options(main_lib INTERFACE -wd4311 -wd4146)
@@ -88,11 +96,18 @@ if(MSVC)
   target_sources(main_lib INTERFACE ${CMAKE_CURRENT_LIST_DIR}/os/nvim.manifest)
 else()
   target_compile_options(main_lib INTERFACE -Wall -Wextra -pedantic -Wno-unused-parameter
-    -Wstrict-prototypes -std=gnu99 -Wshadow -Wconversion
+    -Wstrict-prototypes -std=gnu99 -Wshadow -Wconversion -Wvla
     -Wdouble-promotion
     -Wmissing-noreturn
     -Wmissing-format-attribute
     -Wmissing-prototypes)
+
+  if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(main_lib INTERFACE -fno-common
+      $<$<CONFIG:Release>:-Wno-unused-result>
+      $<$<CONFIG:RelWithDebInfo>:-Wno-unused-result>
+      $<$<CONFIG:MinSizeRel>:-Wno-unused-result>)
+  endif()
 endif()
 
 # On FreeBSD 64 math.h uses unguarded C11 extension, which taints clang
@@ -135,19 +150,7 @@ if(MINGW)
   target_compile_definitions(main_lib INTERFACE __USE_MINGW_ANSI_STDIO)
 endif()
 if(WIN32)
-  # Windows Vista is the minimum supported version
-  target_compile_definitions(main_lib INTERFACE _WIN32_WINNT=0x0600 MSWIN)
-endif()
-
-# OpenBSD's GCC (4.2.1) doesn't have -Wvla
-check_c_compiler_flag(-Wvla HAS_WVLA_FLAG)
-if(HAS_WVLA_FLAG)
-  target_compile_options(main_lib INTERFACE -Wvla)
-endif()
-
-check_c_compiler_flag(-fno-common HAVE_FNO_COMMON)
-if (HAVE_FNO_COMMON)
-  target_compile_options(main_lib INTERFACE -fno-common)
+  target_compile_definitions(main_lib INTERFACE _WIN32_WINNT=0x0602 MSWIN)
 endif()
 
 check_c_compiler_flag(-fdiagnostics-color=auto HAS_DIAG_COLOR_FLAG)
@@ -166,58 +169,13 @@ if(CI_BUILD)
     target_compile_options(main_lib INTERFACE -WX)
   else()
     target_compile_options(main_lib INTERFACE -Werror)
-    if(DEFINED ENV{BUILD_UCHAR})
-      # Get some test coverage for unsigned char
-      target_compile_options(main_lib INTERFACE -funsigned-char)
-    endif()
   endif()
 endif()
 
-list(APPEND CMAKE_REQUIRED_INCLUDES "${MSGPACK_INCLUDE_DIRS}")
-check_c_source_compiles("
-#include <msgpack.h>
-
-int
-main(void)
-{
-  return MSGPACK_OBJECT_FLOAT32;
-}
-" MSGPACK_HAS_FLOAT32)
-list(REMOVE_ITEM CMAKE_REQUIRED_INCLUDES "${MSGPACK_INCLUDE_DIRS}")
-if(MSGPACK_HAS_FLOAT32)
-  target_compile_definitions(main_lib INTERFACE NVIM_MSGPACK_HAS_FLOAT32)
+option(UNSIGNED_CHAR "Set char to be unsigned" OFF)
+if(UNSIGNED_CHAR)
+  target_compile_options(main_lib INTERFACE -funsigned-char)
 endif()
-
-list(APPEND CMAKE_REQUIRED_INCLUDES "${TreeSitter_INCLUDE_DIRS}")
-list(APPEND CMAKE_REQUIRED_LIBRARIES "${TreeSitter_LIBRARIES}")
-check_c_source_compiles("
-#include <tree_sitter/api.h>
-int
-main(void)
-{
-  TSQueryCursor *cursor = ts_query_cursor_new();
-  ts_query_cursor_set_match_limit(cursor, 32);
-  return 0;
-}
-" TS_HAS_SET_MATCH_LIMIT)
-if(TS_HAS_SET_MATCH_LIMIT)
-  target_compile_definitions(main_lib INTERFACE NVIM_TS_HAS_SET_MATCH_LIMIT)
-endif()
-check_c_source_compiles("
-#include <stdlib.h>
-#include <tree_sitter/api.h>
-int
-main(void)
-{
-  ts_set_allocator(malloc, calloc, realloc, free);
-  return 0;
-}
-" TS_HAS_SET_ALLOCATOR)
-if(TS_HAS_SET_ALLOCATOR)
-  target_compile_definitions(main_lib INTERFACE NVIM_TS_HAS_SET_ALLOCATOR)
-endif()
-list(REMOVE_ITEM CMAKE_REQUIRED_INCLUDES "${TreeSitter_INCLUDE_DIRS}")
-list(REMOVE_ITEM CMAKE_REQUIRED_LIBRARIES "${TreeSitter_LIBRARIES}")
 
 target_compile_definitions(main_lib INTERFACE INCLUDE_GENERATED_DECLARATIONS)
 
@@ -242,7 +200,8 @@ endif()
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
   if(CMAKE_SYSTEM_NAME STREQUAL "SunOS")
     target_link_libraries(nvim PRIVATE -Wl,--no-undefined -lsocket)
-  elseif(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+  # workaround for clang-11 on macOS, supported on later versions:
+  elseif(NOT APPLE)
     target_link_libraries(nvim PRIVATE -Wl,--no-undefined)
   endif()
 
@@ -252,11 +211,11 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
   target_compile_definitions(main_lib INTERFACE _GNU_SOURCE)
 endif()
 
-option(USE_GCOV "Enable gcov support" OFF)
-if(USE_GCOV)
-  if(CLANG_TSAN)
+option(ENABLE_GCOV "Enable gcov support" OFF)
+if(ENABLE_GCOV)
+  if(ENABLE_TSAN)
     # GCOV and TSAN results in false data race reports
-    message(FATAL_ERROR "USE_GCOV cannot be used with CLANG_TSAN")
+    message(FATAL_ERROR "ENABLE_GCOV cannot be used with ENABLE_TSAN")
   endif()
   message(STATUS "Enabling gcov support")
   target_compile_options(main_lib INTERFACE --coverage)
@@ -269,20 +228,22 @@ if(WIN32)
     # Enable wmain
     target_link_libraries(nvim PRIVATE -municode)
   endif()
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+elseif(APPLE)
   target_link_libraries(nvim PRIVATE "-framework CoreServices")
 endif()
 
 if(UNIX)
   # -fstack-protector breaks non Unix builds even in Mingw-w64
   check_c_compiler_flag(-fstack-protector-strong HAS_FSTACK_PROTECTOR_STRONG_FLAG)
-  check_c_compiler_flag(-fstack-protector HAS_FSTACK_PROTECTOR_FLAG)
   if(HAS_FSTACK_PROTECTOR_STRONG_FLAG)
     target_compile_options(main_lib INTERFACE -fstack-protector-strong)
     target_link_libraries(main_lib INTERFACE -fstack-protector-strong)
-  elseif(HAS_FSTACK_PROTECTOR_FLAG)
-    target_compile_options(main_lib INTERFACE -fstack-protector --param ssp-buffer-size=4)
-    target_link_libraries(main_lib INTERFACE -fstack-protector --param ssp-buffer-size=4)
+  else()
+    check_c_compiler_flag(-fstack-protector HAS_FSTACK_PROTECTOR_FLAG)
+    if(HAS_FSTACK_PROTECTOR_FLAG)
+      target_compile_options(main_lib INTERFACE -fstack-protector --param ssp-buffer-size=4)
+      target_link_libraries(main_lib INTERFACE -fstack-protector --param ssp-buffer-size=4)
+    endif()
   endif()
 endif()
 
@@ -291,6 +252,7 @@ set(GENERATED_DIR ${PROJECT_BINARY_DIR}/src/nvim/auto)
 set(BINARY_LIB_DIR ${PROJECT_BINARY_DIR}/lib/nvim/)
 set(API_DISPATCH_GENERATOR ${GENERATOR_DIR}/gen_api_dispatch.lua)
 set(API_UI_EVENTS_GENERATOR ${GENERATOR_DIR}/gen_api_ui_events.lua)
+set(GENERATOR_PRELOAD ${GENERATOR_DIR}/preload.lua)
 set(GENERATOR_C_GRAMMAR ${GENERATOR_DIR}/c_grammar.lua)
 set(GENERATOR_HASHY ${GENERATOR_DIR}/hashy.lua)
 set(API_METADATA ${PROJECT_BINARY_DIR}/api_metadata.mpack)
@@ -307,7 +269,6 @@ set(GENERATED_UI_EVENTS_METADATA ${GENERATED_DIR}/api/private/ui_events_metadata
 set(GENERATED_EX_CMDS_ENUM ${GENERATED_INCLUDES_DIR}/ex_cmds_enum.generated.h)
 set(GENERATED_EX_CMDS_DEFS ${GENERATED_DIR}/ex_cmds_defs.generated.h)
 set(GENERATED_FUNCS ${GENERATED_DIR}/funcs.generated.h)
-set(GENERATED_KEYSETS ${GENERATED_DIR}/keysets.generated.h)
 set(GENERATED_KEYSETS_DEFS ${GENERATED_DIR}/keysets_defs.generated.h)
 set(GENERATED_EVENTS_ENUM ${GENERATED_INCLUDES_DIR}/auevents_enum.generated.h)
 set(GENERATED_EVENTS_NAMES_MAP ${GENERATED_DIR}/auevents_name_map.generated.h)
@@ -315,7 +276,6 @@ set(GENERATED_OPTIONS ${GENERATED_DIR}/options.generated.h)
 set(EX_CMDS_GENERATOR ${GENERATOR_DIR}/gen_ex_cmds.lua)
 set(FUNCS_GENERATOR ${GENERATOR_DIR}/gen_eval.lua)
 set(EVENTS_GENERATOR ${GENERATOR_DIR}/gen_events.lua)
-set(KEYSETS_GENERATOR ${GENERATOR_DIR}/gen_keysets.lua)
 set(OPTIONS_GENERATOR ${GENERATOR_DIR}/gen_options.lua)
 set(UNICODE_TABLES_GENERATOR ${GENERATOR_DIR}/gen_unicode_tables.lua)
 set(UNICODE_DIR ${PROJECT_SOURCE_DIR}/src/unicode)
@@ -323,13 +283,16 @@ set(GENERATED_UNICODE_TABLES ${GENERATED_DIR}/unicode_tables.generated.h)
 set(VIM_MODULE_FILE ${GENERATED_DIR}/lua/vim_module.generated.h)
 set(LUA_EDITOR_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/_editor.lua)
 set(LUA_SHARED_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/shared.lua)
+set(LUA_LOADER_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/loader.lua)
 set(LUA_INSPECT_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/inspect.lua)
+set(LUA_FS_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/fs.lua)
 set(LUA_F_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/F.lua)
 set(LUA_META_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/_meta.lua)
 set(LUA_FILETYPE_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/filetype.lua)
 set(LUA_INIT_PACKAGES_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/_init_packages.lua)
 set(LUA_KEYMAP_MODULE_SOURCE ${PROJECT_SOURCE_DIR}/runtime/lua/vim/keymap.lua)
 set(CHAR_BLOB_GENERATOR ${GENERATOR_DIR}/gen_char_blob.lua)
+set(LUAJIT_RUNTIME_DIR ${DEPS_PREFIX}/share/luajit-2.1.0-beta3/jit)
 
 glob_wrapper(UNICODE_FILES ${UNICODE_DIR}/*.txt)
 glob_wrapper(API_HEADERS api/*.h)
@@ -342,6 +305,10 @@ target_include_directories(main_lib INTERFACE ${GENERATED_INCLUDES_DIR})
 target_include_directories(main_lib INTERFACE "${PROJECT_BINARY_DIR}/cmake.config")
 target_include_directories(main_lib INTERFACE "${PROJECT_SOURCE_DIR}/src")
 
+target_include_directories(nlua0 PUBLIC "${PROJECT_SOURCE_DIR}/src")
+target_include_directories(nlua0 PUBLIC "${PROJECT_BINARY_DIR}/cmake.config")
+target_include_directories(nlua0 PUBLIC ${GENERATED_INCLUDES_DIR})
+
 file(MAKE_DIRECTORY ${TOUCHES_DIR})
 file(MAKE_DIRECTORY ${GENERATED_DIR})
 file(MAKE_DIRECTORY ${GENERATED_INCLUDES_DIR})
@@ -350,6 +317,17 @@ glob_wrapper(NVIM_SOURCES *.c)
 glob_wrapper(NVIM_HEADERS *.h)
 glob_wrapper(EXTERNAL_SOURCES ../xdiff/*.c ../mpack/*.c ../cjson/*.c ../klib/*.c)
 glob_wrapper(EXTERNAL_HEADERS ../xdiff/*.h ../mpack/*.h ../cjson/*.h ../klib/*.h)
+
+glob_wrapper(NLUA0_SOURCES ../mpack/*.c)
+
+if(PREFER_LUA)
+  # luajit not used, use a vendored copy of the bit module
+  list(APPEND EXTERNAL_SOURCES ${PROJECT_SOURCE_DIR}/src/bit.c)
+  list(APPEND NLUA0_SOURCES ${PROJECT_SOURCE_DIR}/src/bit.c)
+  target_compile_definitions(main_lib INTERFACE NVIM_VENDOR_BIT)
+endif()
+
+list(APPEND NLUA0_SOURCES ${PROJECT_SOURCE_DIR}/src/nlua0.c)
 
 foreach(subdir
         os
@@ -406,25 +384,25 @@ list(REMOVE_ITEM NVIM_SOURCES ${to_remove})
 # xdiff, mpack, lua-cjson: inlined external project, we don't maintain it. #9306
 if(MSVC)
   set_source_files_properties(
-    ${EXTERNAL_SOURCES} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS} /wd4090 /wd4244")
+    ${EXTERNAL_SOURCES} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS} -wd4090 -wd4244 -wd4267")
 else()
   set_source_files_properties(
-    ${EXTERNAL_SOURCES} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS} -Wno-conversion -Wno-missing-noreturn -Wno-missing-format-attribute -Wno-double-promotion -Wno-strict-prototypes")
+    ${EXTERNAL_SOURCES} PROPERTIES COMPILE_FLAGS "${COMPILE_FLAGS} -Wno-conversion -Wno-missing-noreturn -Wno-missing-format-attribute -Wno-double-promotion -Wno-strict-prototypes -Wno-misleading-indentation")
 endif()
 
-# Log level (MIN_LOG_LEVEL in log.h)
-if("${MIN_LOG_LEVEL}" MATCHES "^$")
-  # Minimize logging for release-type builds.
-  target_compile_definitions(main_lib INTERFACE MIN_LOG_LEVEL=$<IF:$<CONFIG:Debug>,1,3>)
+# Log level (NVIM_LOG_DEBUG in log.h)
+if($ENV{CI})
+  # Don't debug log on CI, it gets too verbose in the main build log.
+  # TODO(bfredl): debug log level also exposes some errors with EXITFREE in ASAN build.
+  set(LOG_DEBUG FALSE)
+elseif(LOG_DEBUG)
+  target_compile_definitions(nvim PRIVATE NVIM_LOG_DEBUG)
 else()
-  if(NOT MIN_LOG_LEVEL MATCHES "^[0-3]$")
-    message(FATAL_ERROR "invalid MIN_LOG_LEVEL: " ${MIN_LOG_LEVEL})
-  endif()
-  message(STATUS "MIN_LOG_LEVEL=${MIN_LOG_LEVEL}")
-  target_compile_definitions(main_lib INTERFACE MIN_LOG_LEVEL=${MIN_LOG_LEVEL})
+  # Minimize logging for release-type builds.
+  target_compile_definitions(nvim PRIVATE $<$<CONFIG:Debug>:NVIM_LOG_DEBUG>)
 endif()
 
-if(CLANG_ASAN_UBSAN OR CLANG_MSAN OR CLANG_TSAN)
+if(ENABLE_ASAN_UBSAN OR ENABLE_MSAN OR ENABLE_TSAN)
   target_compile_definitions(main_lib INTERFACE EXITFREE)
 endif()
 
@@ -435,11 +413,15 @@ foreach(gen_cdef DO_NOT_DEFINE_EMPTY_ATTRIBUTES ${prop})
   endif()
 endforeach()
 
-get_target_property(prop main_lib INTERFACE_INCLUDE_DIRECTORIES)
-foreach(gen_include ${prop})
-  list(APPEND gen_cflags "-I${gen_include}")
+get_directory_property(targets BUILDSYSTEM_TARGETS)
+foreach(target ${targets})
+  get_target_property(prop ${target} INTERFACE_INCLUDE_DIRECTORIES)
+  foreach(gen_include ${prop})
+    list(APPEND gen_cflags "-I${gen_include}")
+  endforeach()
 endforeach()
-if(CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND CMAKE_OSX_SYSROOT)
+
+if(APPLE AND CMAKE_OSX_SYSROOT)
   list(APPEND gen_cflags "-isysroot")
   list(APPEND gen_cflags "${CMAKE_OSX_SYSROOT}")
 endif()
@@ -448,14 +430,26 @@ set(gen_cflags ${gen_cflags} -O2)
 set(NVIM_VERSION_GIT_H ${PROJECT_BINARY_DIR}/cmake.config/auto/versiondef_git.h)
 add_custom_target(update_version_stamp
   COMMAND ${CMAKE_COMMAND}
-    -DNVIM_VERSION_MAJOR=${NVIM_VERSION_MAJOR}
-    -DNVIM_VERSION_MINOR=${NVIM_VERSION_MINOR}
-    -DNVIM_VERSION_PATCH=${NVIM_VERSION_PATCH}
-    -DNVIM_VERSION_PRERELEASE=${NVIM_VERSION_PRERELEASE}
-    -DOUTPUT=${NVIM_VERSION_GIT_H}
-    -DNVIM_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+    -D NVIM_VERSION_MAJOR=${NVIM_VERSION_MAJOR}
+    -D NVIM_VERSION_MINOR=${NVIM_VERSION_MINOR}
+    -D NVIM_VERSION_PATCH=${NVIM_VERSION_PATCH}
+    -D NVIM_VERSION_PRERELEASE=${NVIM_VERSION_PRERELEASE}
+    -D OUTPUT=${NVIM_VERSION_GIT_H}
+    -D NVIM_SOURCE_DIR=${CMAKE_SOURCE_DIR}
     -P ${PROJECT_SOURCE_DIR}/cmake/GenerateVersion.cmake
   BYPRODUCTS ${NVIM_VERSION_GIT_H})
+
+set(NVIM_VERSION_DEF_H ${PROJECT_BINARY_DIR}/cmake.config/auto/versiondef.h)
+add_custom_command(
+  OUTPUT "${NVIM_VERSION_DEF_H}"
+  COMMAND "${CMAKE_COMMAND}"
+    -E copy
+    "${PROJECT_BINARY_DIR}/cmake.config/auto/versiondef-$<CONFIG>.h"
+    "${NVIM_VERSION_DEF_H}"
+  DEPENDS "${PROJECT_BINARY_DIR}/cmake.config/auto/versiondef-$<CONFIG>.h")
+
+set(LUA_GEN ${LUA_GEN_PRG} ${GENERATOR_PRELOAD} ${PROJECT_SOURCE_DIR} $<TARGET_FILE:nlua0>)
+set(LUA_GEN_DEPS ${GENERATOR_PRELOAD} $<TARGET_FILE:nlua0>)
 
 # NVIM_GENERATED_FOR_HEADERS: generated headers to be included in headers
 # NVIM_GENERATED_FOR_SOURCES: generated headers to be included in sources
@@ -467,7 +461,6 @@ foreach(sfile ${NVIM_SOURCES}
               ${GENERATED_API_DISPATCH}
               "${GENERATED_UI_EVENTS_CALL}"
               "${GENERATED_UI_EVENTS_REMOTE}"
-              "${GENERATED_KEYSETS}"
               "${GENERATED_UI_EVENTS_CLIENT}"
               )
   get_filename_component(full_d ${sfile} DIRECTORY)
@@ -491,15 +484,15 @@ foreach(sfile ${NVIM_SOURCES}
     set(PREPROC_OUTPUT -E -o ${gf_i})
   endif()
 
-  set(depends "${HEADER_GENERATOR}" "${sfile}")
+  set(depends "${HEADER_GENERATOR}" "${sfile}" "${LUA_GEN_DEPS}")
   if("${f}" STREQUAL "version.c")
     # Ensure auto/versiondef_git.h exists after "make clean".
-    list(APPEND depends update_version_stamp "${NVIM_VERSION_GIT_H}")
+    list(APPEND depends update_version_stamp "${NVIM_VERSION_GIT_H}" "${NVIM_VERSION_DEF_H}")
   endif()
   add_custom_command(
     OUTPUT "${gf_c_h}" "${gf_h_h}"
     COMMAND ${CMAKE_C_COMPILER} ${sfile} ${PREPROC_OUTPUT} ${gen_cflags}
-    COMMAND "${LUA_PRG}" "${HEADER_GENERATOR}" "${sfile}" "${gf_c_h}" "${gf_h_h}" "${gf_i}"
+    COMMAND ${LUA_GEN} "${HEADER_GENERATOR}" "${sfile}" "${gf_c_h}" "${gf_h_h}" "${gf_i}"
     DEPENDS ${depends})
   list(APPEND NVIM_GENERATED_FOR_SOURCES "${gf_c_h}")
   list(APPEND NVIM_GENERATED_FOR_HEADERS "${gf_h_h}")
@@ -519,13 +512,15 @@ add_custom_command(OUTPUT ${GENERATED_UNICODE_TABLES}
 
 add_custom_command(
   OUTPUT ${GENERATED_API_DISPATCH} ${GENERATED_FUNCS_METADATA}
-         ${API_METADATA} ${LUA_API_C_BINDINGS}
-  COMMAND ${LUA_GEN_PRG} ${API_DISPATCH_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}
+         ${API_METADATA} ${LUA_API_C_BINDINGS} ${GENERATED_KEYSETS_DEFS}
+         COMMAND ${LUA_GEN} ${API_DISPATCH_GENERATOR}
                          ${GENERATED_API_DISPATCH}
                          ${GENERATED_FUNCS_METADATA} ${API_METADATA}
                          ${LUA_API_C_BINDINGS}
+                         ${GENERATED_KEYSETS_DEFS}
                          ${API_HEADERS}
   DEPENDS
+    ${LUA_GEN_DEPS}
     ${API_HEADERS}
     ${MSGPACK_RPC_HEADERS}
     ${API_DISPATCH_GENERATOR}
@@ -538,25 +533,28 @@ add_custom_command(
   COMMAND ${CMAKE_COMMAND} -E env
       "LUAC_PRG=${LUAC_PRG}"
       ${LUA_PRG} ${CHAR_BLOB_GENERATOR} -c ${VIM_MODULE_FILE}
+      ${LUA_EDITOR_MODULE_SOURCE} "vim._editor"
+      ${LUA_FILETYPE_MODULE_SOURCE} "vim.filetype"
+      ${LUA_FS_MODULE_SOURCE} "vim.fs"
+      ${LUA_F_MODULE_SOURCE} "vim.F"
       ${LUA_INIT_PACKAGES_MODULE_SOURCE} "vim._init_packages"
       ${LUA_INSPECT_MODULE_SOURCE} "vim.inspect"
-      ${LUA_EDITOR_MODULE_SOURCE} "vim._editor"
-      ${LUA_SHARED_MODULE_SOURCE} "vim.shared"
-      ${LUA_F_MODULE_SOURCE} "vim.F"
-      ${LUA_META_MODULE_SOURCE} "vim._meta"
-      ${LUA_FILETYPE_MODULE_SOURCE} "vim.filetype"
       ${LUA_KEYMAP_MODULE_SOURCE} "vim.keymap"
+      ${LUA_LOADER_MODULE_SOURCE} "vim.loader"
+      ${LUA_META_MODULE_SOURCE} "vim._meta"
+      ${LUA_SHARED_MODULE_SOURCE} "vim.shared"
   DEPENDS
     ${CHAR_BLOB_GENERATOR}
-    ${LUA_INIT_PACKAGES_MODULE_SOURCE}
     ${LUA_EDITOR_MODULE_SOURCE}
-    ${LUA_SHARED_MODULE_SOURCE}
-    ${LUA_INSPECT_MODULE_SOURCE}
-    ${LUA_F_MODULE_SOURCE}
-    ${LUA_META_MODULE_SOURCE}
     ${LUA_FILETYPE_MODULE_SOURCE}
-    ${LUA_LOAD_PACKAGE_MODULE_SOURCE}
+    ${LUA_FS_MODULE_SOURCE}
+    ${LUA_F_MODULE_SOURCE}
+    ${LUA_INIT_PACKAGES_MODULE_SOURCE}
+    ${LUA_INSPECT_MODULE_SOURCE}
     ${LUA_KEYMAP_MODULE_SOURCE}
+    ${LUA_LOADER_MODULE_SOURCE}
+    ${LUA_META_MODULE_SOURCE}
+    ${LUA_SHARED_MODULE_SOURCE}
   VERBATIM
 )
 
@@ -569,13 +567,14 @@ add_custom_command(
          ${GENERATED_UI_EVENTS_REMOTE}
          ${GENERATED_UI_EVENTS_METADATA}
          ${GENERATED_UI_EVENTS_CLIENT}
-  COMMAND ${LUA_GEN_PRG} ${API_UI_EVENTS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}
-                         ${CMAKE_CURRENT_LIST_DIR}/api/ui_events.in.h
-                         ${GENERATED_UI_EVENTS_CALL}
-                         ${GENERATED_UI_EVENTS_REMOTE}
-                         ${GENERATED_UI_EVENTS_METADATA}
-                         ${GENERATED_UI_EVENTS_CLIENT}
+  COMMAND ${LUA_GEN} ${API_UI_EVENTS_GENERATOR}
+                     ${CMAKE_CURRENT_LIST_DIR}/api/ui_events.in.h
+                     ${GENERATED_UI_EVENTS_CALL}
+                     ${GENERATED_UI_EVENTS_REMOTE}
+                     ${GENERATED_UI_EVENTS_METADATA}
+                     ${GENERATED_UI_EVENTS_CLIENT}
   DEPENDS
+    ${LUA_GEN_DEPS}
     ${API_UI_EVENTS_GENERATOR}
     ${GENERATOR_C_GRAMMAR}
     ${CMAKE_CURRENT_LIST_DIR}/api/ui_events.in.h
@@ -591,7 +590,6 @@ list(APPEND NVIM_GENERATED_FOR_SOURCES
   "${GENERATED_API_DISPATCH}"
   "${GENERATED_EX_CMDS_DEFS}"
   "${GENERATED_EVENTS_NAMES_MAP}"
-  "${GENERATED_KEYSETS}"
   "${GENERATED_OPTIONS}"
   "${GENERATED_UNICODE_TABLES}"
   "${VIM_MODULE_FILE}"
@@ -602,35 +600,25 @@ list(APPEND NVIM_GENERATED_SOURCES
 )
 
 add_custom_command(OUTPUT ${GENERATED_EX_CMDS_ENUM} ${GENERATED_EX_CMDS_DEFS}
-  COMMAND ${LUA_PRG} ${EX_CMDS_GENERATOR}
-      ${CMAKE_CURRENT_LIST_DIR} ${GENERATED_INCLUDES_DIR} ${GENERATED_DIR}
-  DEPENDS ${EX_CMDS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/ex_cmds.lua
+  COMMAND ${LUA_GEN} ${EX_CMDS_GENERATOR} ${GENERATED_INCLUDES_DIR} ${GENERATED_DIR}
+  DEPENDS ${LUA_GEN_DEPS} ${EX_CMDS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/ex_cmds.lua
 )
 
 add_custom_command(OUTPUT ${GENERATED_FUNCS} ${FUNCS_DATA}
-  COMMAND ${LUA_PRG} ${FUNCS_GENERATOR}
-      ${CMAKE_CURRENT_LIST_DIR} ${LUA_SHARED_MODULE_SOURCE} ${GENERATED_DIR} ${API_METADATA} ${FUNCS_DATA}
-  DEPENDS ${FUNCS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/eval.lua ${API_METADATA}
+  COMMAND ${LUA_GEN} ${FUNCS_GENERATOR} ${GENERATED_DIR} ${API_METADATA} ${FUNCS_DATA}
+  DEPENDS ${LUA_GEN_DEPS} ${FUNCS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/eval.lua ${API_METADATA}
 )
 list(APPEND NVIM_GENERATED_FOR_SOURCES
   "${GENERATED_FUNCS}")
 
 add_custom_command(OUTPUT ${GENERATED_EVENTS_ENUM} ${GENERATED_EVENTS_NAMES_MAP}
-  COMMAND ${LUA_PRG} ${EVENTS_GENERATOR}
-      ${CMAKE_CURRENT_LIST_DIR} ${GENERATED_EVENTS_ENUM} ${GENERATED_EVENTS_NAMES_MAP}
-  DEPENDS ${EVENTS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/auevents.lua
-)
-
-add_custom_command(OUTPUT ${GENERATED_KEYSETS} ${GENERATED_KEYSETS_DEFS}
-  COMMAND ${LUA_PRG} ${KEYSETS_GENERATOR}
-      ${CMAKE_CURRENT_LIST_DIR} ${LUA_SHARED_MODULE_SOURCE} ${GENERATED_KEYSETS} ${GENERATED_KEYSETS_DEFS}
-  DEPENDS ${KEYSETS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/api/keysets.lua ${GENERATOR_HASHY}
+  COMMAND ${LUA_GEN} ${EVENTS_GENERATOR} ${GENERATED_EVENTS_ENUM} ${GENERATED_EVENTS_NAMES_MAP}
+  DEPENDS ${LUA_GEN_DEPS} ${EVENTS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/auevents.lua
 )
 
 add_custom_command(OUTPUT ${GENERATED_OPTIONS}
-  COMMAND ${LUA_PRG} ${OPTIONS_GENERATOR}
-                     ${CMAKE_CURRENT_LIST_DIR} ${GENERATED_OPTIONS}
-  DEPENDS ${OPTIONS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/options.lua
+  COMMAND ${LUA_GEN} ${OPTIONS_GENERATOR} ${GENERATED_OPTIONS}
+  DEPENDS ${LUA_GEN_DEPS} ${OPTIONS_GENERATOR} ${CMAKE_CURRENT_LIST_DIR}/options.lua
 )
 
 # NVIM_GENERATED_FOR_SOURCES and NVIM_GENERATED_FOR_HEADERS must be mutually exclusive.
@@ -656,17 +644,24 @@ if(UNIX)
   endif()
 endif()
 
-if(NOT LUAJIT_FOUND)
-  message(STATUS "luajit not found, skipping unit tests")
+if(PREFER_LUA)
+  message(STATUS "luajit not used, skipping unit tests")
 else()
   glob_wrapper(UNIT_TEST_FIXTURES ${PROJECT_SOURCE_DIR}/test/unit/fixtures/*.c)
-  target_sources(nvim PRIVATE $<$<CONFIG:Debug>:${UNIT_TEST_FIXTURES}>)
-  target_compile_definitions(nvim PRIVATE $<$<CONFIG:Debug>:UNIT_TESTING>)
+  target_sources(nvim PRIVATE ${UNIT_TEST_FIXTURES})
+  target_compile_definitions(nvim PRIVATE UNIT_TESTING)
 endif()
 
-target_sources(nvim PRIVATE ${NVIM_GENERATED_FOR_SOURCES} ${NVIM_GENERATED_FOR_HEADERS}
-  ${NVIM_GENERATED_SOURCES} ${NVIM_SOURCES} ${NVIM_HEADERS}
-  ${EXTERNAL_SOURCES} ${EXTERNAL_HEADERS})
+target_sources(main_lib INTERFACE
+  ${NVIM_GENERATED_FOR_SOURCES}
+  ${NVIM_GENERATED_FOR_HEADERS}
+  ${NVIM_GENERATED_SOURCES}
+  ${NVIM_SOURCES}
+  ${NVIM_HEADERS}
+  ${EXTERNAL_SOURCES}
+  ${EXTERNAL_HEADERS})
+
+target_sources(nlua0 PUBLIC ${NLUA0_SOURCES})
 
 set_target_properties(nvim
   PROPERTIES
@@ -677,7 +672,7 @@ if(${CMAKE_VERSION} VERSION_LESS 3.20)
   set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 endif()
 
-target_link_libraries(nvim PRIVATE main_lib PUBLIC libuv_lib)
+target_link_libraries(nvim PRIVATE main_lib PUBLIC libuv)
 install_helper(TARGETS nvim)
 if(MSVC)
   install(FILES $<TARGET_PDB_FILE:nvim> DESTINATION ${CMAKE_INSTALL_BINDIR} OPTIONAL)
@@ -705,11 +700,64 @@ if(WIN32)
   add_custom_target(nvim_dll_deps DEPENDS nvim
     COMMAND ${CMAKE_COMMAND} -E make_directory ${PROJECT_BINARY_DIR}/windows_runtime_deps
     COMMAND ${CMAKE_COMMAND}
-      "-DCMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}"
-      -DBINARY="${PROJECT_BINARY_DIR}/bin/nvim${CMAKE_EXECUTABLE_SUFFIX}"
-      -DDST=${PROJECT_BINARY_DIR}/windows_runtime_deps
+      -D CMAKE_PREFIX_PATH=${CMAKE_PREFIX_PATH}
+      -D BINARY="${PROJECT_BINARY_DIR}/bin/nvim${CMAKE_EXECUTABLE_SUFFIX}"
+      -D DST=${PROJECT_BINARY_DIR}/windows_runtime_deps
       -P ${PROJECT_SOURCE_DIR}/cmake/WindowsDllCopy.cmake)
   add_dependencies(nvim_runtime_deps nvim_dll_deps)
+
+  if(USE_BUNDLED_NVIMQT)
+    set(NVIMQT_DEPS
+      # Dependencies for neovim-qt
+      bearer/qgenericbearer.dll
+      iconengines/qsvgicon.dll
+      imageformats/qgif.dll
+      imageformats/qicns.dll
+      imageformats/qico.dll
+      imageformats/qjpeg.dll
+      imageformats/qsvg.dll
+      imageformats/qtga.dll
+      imageformats/qtiff.dll
+      imageformats/qwbmp.dll
+      imageformats/qwebp.dll
+      platforms/qwindows.dll
+      styles/qwindowsvistastyle.dll
+      translations/qt_ar.qm
+      translations/qt_bg.qm
+      translations/qt_ca.qm
+      translations/qt_cs.qm
+      translations/qt_da.qm
+      translations/qt_de.qm
+      translations/qt_en.qm
+      translations/qt_es.qm
+      translations/qt_fi.qm
+      translations/qt_fr.qm
+      translations/qt_gd.qm
+      translations/qt_he.qm
+      translations/qt_hu.qm
+      translations/qt_it.qm
+      translations/qt_ja.qm
+      translations/qt_ko.qm
+      translations/qt_lv.qm
+      translations/qt_pl.qm
+      translations/qt_ru.qm
+      translations/qt_sk.qm
+      translations/qt_uk.qm
+      D3Dcompiler_47.dll
+      libEGL.dll
+      libgcc_s_seh-1.dll
+      libGLESv2.dll
+      libstdc++-6.dll
+      libwinpthread-1.dll
+      nvim-qt.exe
+      opengl32sw.dll
+      Qt5Core.dll
+      Qt5Gui.dll
+      Qt5Network.dll
+      Qt5Svg.dll
+      Qt5Widgets.dll
+      )
+  endif()
 
   # A CMake script is used for copying the files to avoid the
   # "command line is too long" error that occurs when Ninja tries running
@@ -718,77 +766,24 @@ if(WIN32)
   set(EXTERNAL_BLOBS_SCRIPT
     "file(MAKE_DIRECTORY \"${PROJECT_BINARY_DIR}/windows_runtime_deps/platforms\")")
   foreach(DEP_FILE IN ITEMS
-                      curl-ca-bundle.crt
-                      curl.exe
-                      diff.exe
-                      tee.exe
-                      win32yank.exe
-                      xxd.exe
+      cat.exe
+      tee.exe
+      win32yank.exe
+      xxd.exe
 
-                      # Dependencies for neovim-qt
-                      bearer/qgenericbearer.dll
-                      iconengines/qsvgicon.dll
-                      imageformats/qgif.dll
-                      imageformats/qicns.dll
-                      imageformats/qico.dll
-                      imageformats/qjpeg.dll
-                      imageformats/qsvg.dll
-                      imageformats/qtga.dll
-                      imageformats/qtiff.dll
-                      imageformats/qwbmp.dll
-                      imageformats/qwebp.dll
-                      platforms/qwindows.dll
-                      styles/qwindowsvistastyle.dll
-                      translations/qt_ar.qm
-                      translations/qt_bg.qm
-                      translations/qt_ca.qm
-                      translations/qt_cs.qm
-                      translations/qt_da.qm
-                      translations/qt_de.qm
-                      translations/qt_en.qm
-                      translations/qt_es.qm
-                      translations/qt_fi.qm
-                      translations/qt_fr.qm
-                      translations/qt_gd.qm
-                      translations/qt_he.qm
-                      translations/qt_hu.qm
-                      translations/qt_it.qm
-                      translations/qt_ja.qm
-                      translations/qt_ko.qm
-                      translations/qt_lv.qm
-                      translations/qt_pl.qm
-                      translations/qt_ru.qm
-                      translations/qt_sk.qm
-                      translations/qt_uk.qm
-                      D3Dcompiler_47.dll
-                      libEGL.dll
-                      libgcc_s_seh-1.dll
-                      libGLESv2.dll
-                      libstdc++-6.dll
-                      libwinpthread-1.dll
-                      nvim-qt.exe
-                      opengl32sw.dll
-                      Qt5Core.dll
-                      Qt5Gui.dll
-                      Qt5Network.dll
-                      Qt5Svg.dll
-                      Qt5Widgets.dll
-
-                      )
-    get_filename_component(DEP_FILE_DIR ${DEP_FILE} DIRECTORY)
-    set(EXTERNAL_BLOBS_SCRIPT "${EXTERNAL_BLOBS_SCRIPT}\n"
-      "file(COPY \"${DEPS_PREFIX}/bin/${DEP_FILE}\"
-         DESTINATION \"${PROJECT_BINARY_DIR}/windows_runtime_deps/${DEP_FILE_DIR}\")")
+      ${NVIMQT_DEPS})
+  get_filename_component(DEP_FILE_DIR ${DEP_FILE} DIRECTORY)
+  set(EXTERNAL_BLOBS_SCRIPT "${EXTERNAL_BLOBS_SCRIPT}\n"
+    "file(COPY \"${DEPS_PREFIX}/bin/${DEP_FILE}\"
+    DESTINATION \"${PROJECT_BINARY_DIR}/windows_runtime_deps/${DEP_FILE_DIR}\")")
   endforeach()
   file(WRITE ${PROJECT_BINARY_DIR}/external_blobs.cmake ${EXTERNAL_BLOBS_SCRIPT})
   add_custom_target(external_blobs
     COMMAND ${CMAKE_COMMAND} -P ${PROJECT_BINARY_DIR}/external_blobs.cmake)
-  set_target_properties(external_blobs PROPERTIES FOLDER deps)
   add_dependencies(nvim_runtime_deps external_blobs)
 else()
   add_custom_target(nvim_runtime_deps)  # Stub target to avoid CMP0046.
 endif()
-set_target_properties(nvim_runtime_deps PROPERTIES FOLDER deps)
 
 file(MAKE_DIRECTORY ${BINARY_LIB_DIR})
 
@@ -804,14 +799,16 @@ install(DIRECTORY ${BINARY_LIB_DIR}
   DESTINATION ${CMAKE_INSTALL_LIBDIR}/nvim/
   USE_SOURCE_PERMISSIONS)
 
-add_library(
-  libnvim
-  STATIC
-  EXCLUDE_FROM_ALL
-  ${NVIM_SOURCES} ${NVIM_GENERATED_SOURCES}
-  ${NVIM_HEADERS} ${NVIM_GENERATED_FOR_SOURCES} ${NVIM_GENERATED_FOR_HEADERS}
-  ${EXTERNAL_SOURCES} ${EXTERNAL_HEADERS}
-)
+if(NOT PREFER_LUA)
+  # install luajit runtime files if bundled
+  if(EXISTS ${LUAJIT_RUNTIME_DIR})
+    install(DIRECTORY ${LUAJIT_RUNTIME_DIR}
+      DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/nvim/runtime/lua
+      USE_SOURCE_PERMISSIONS)
+  endif()
+endif()
+
+add_library(libnvim STATIC EXCLUDE_FROM_ALL)
 if(MSVC)
   set(LIBNVIM_NAME libnvim)
 else()
@@ -823,10 +820,10 @@ set_target_properties(
     OUTPUT_NAME ${LIBNVIM_NAME}
 )
 target_compile_definitions(libnvim PRIVATE MAKE_LIB)
-target_link_libraries(libnvim PRIVATE main_lib PUBLIC libuv_lib)
+target_link_libraries(libnvim PRIVATE main_lib PUBLIC libuv)
 
-if(CLANG_ASAN_UBSAN)
-  message(STATUS "Enabling Clang address sanitizer and undefined behavior sanitizer for nvim.")
+if(ENABLE_ASAN_UBSAN)
+  message(STATUS "Enabling address sanitizer and undefined behavior sanitizer for nvim.")
   if(CI_BUILD)
     # Try to recover from all sanitize issues so we get reports about all failures
     target_compile_options(nvim PRIVATE -fsanitize-recover=all)
@@ -837,80 +834,51 @@ if(CLANG_ASAN_UBSAN)
     -fno-omit-frame-pointer
     -fno-optimize-sibling-calls
     -fsanitize=address
-    -fsanitize=undefined
-    -fsanitize-blacklist=${PROJECT_SOURCE_DIR}/src/.asan-blacklist)
+    -fsanitize=undefined)
   target_link_libraries(nvim PRIVATE -fsanitize=address -fsanitize=undefined)
-elseif(CLANG_MSAN)
-  message(STATUS "Enabling Clang memory sanitizer for nvim.")
+elseif(ENABLE_MSAN)
+  message(STATUS "Enabling memory sanitizer for nvim.")
   target_compile_options(nvim PRIVATE
     -fsanitize=memory
     -fsanitize-memory-track-origins
     -fno-omit-frame-pointer
     -fno-optimize-sibling-calls)
   target_link_libraries(nvim PRIVATE -fsanitize=memory -fsanitize-memory-track-origins)
-elseif(CLANG_TSAN)
-  message(STATUS "Enabling Clang thread sanitizer for nvim.")
+elseif(ENABLE_TSAN)
+  message(STATUS "Enabling thread sanitizer for nvim.")
   target_compile_options(nvim PRIVATE -fsanitize=thread -fPIE)
   target_link_libraries(nvim PRIVATE -fsanitize=thread)
 endif()
 
-function(get_test_target prefix sfile relative_path_var target_var)
-  get_filename_component(full_d "${sfile}" DIRECTORY)
-  file(RELATIVE_PATH d "${PROJECT_SOURCE_DIR}/src/nvim" "${full_d}")
-  if(d MATCHES "^[.][.]")
-    file(RELATIVE_PATH d "${GENERATED_DIR}" "${full_d}")
-  endif()
-  get_filename_component(r "${sfile}" NAME)
-  if(NOT d MATCHES "^[.]?$")
-    set(r "${d}/${r}")
-  endif()
-  string(REGEX REPLACE "[/.]" "-" suffix "${r}")
-  set(${relative_path_var} ${r} PARENT_SCOPE)
-  if(prefix STREQUAL "")
-    set(${target_var} "${suffix}" PARENT_SCOPE)
-  else()
-    set(${target_var} "${prefix}-${suffix}" PARENT_SCOPE)
-  endif()
-endfunction()
-
+find_program(CLANG_TIDY_PRG clang-tidy)
+set(EXCLUDE_CLANG_TIDY typval_encode.c.h ui_events.in.h)
 if(WIN32)
-  set(NO_SINGLE_CHECK_HEADERS
+  list(APPEND EXCLUDE_CLANG_TIDY
     os/pty_process_unix.h
     os/unix_defs.h)
 else()
-  set(NO_SINGLE_CHECK_HEADERS
+  list(APPEND EXCLUDE_CLANG_TIDY
     os/win_defs.h
     os/pty_process_win.h
     os/pty_conpty_win.h
     os/os_win_console.h)
 endif()
-foreach(hfile ${NVIM_HEADERS})
-  get_test_target(test-includes "${hfile}" relative_path texe)
-
-  if(NOT ${hfile} MATCHES "[.](c|in)[.]h$")
-    set(tsource "${GENERATED_DIR}/${relative_path}.test-include.c")
-    write_file("${tsource}" "#include \"${hfile}\"\nint main(int argc, char **argv) { return 0; }")
-    add_executable(
-      ${texe}
-      EXCLUDE_FROM_ALL
-      ${tsource} ${NVIM_HEADERS} ${NVIM_GENERATED_FOR_HEADERS})
-    target_link_libraries(${texe} PRIVATE main_lib)
-    set_target_properties(${texe} PROPERTIES FOLDER test)
-
-    list(FIND NO_SINGLE_CHECK_HEADERS "${relative_path}" hfile_exclude_idx)
-    if(${hfile_exclude_idx} EQUAL -1)
-      list(APPEND HEADER_CHECK_TARGETS ${texe})
-    endif()
-  endif()
-endforeach()
-add_custom_target(check-single-includes DEPENDS ${HEADER_CHECK_TARGETS})
+add_glob_target(
+  TARGET clang-tidy
+  COMMAND ${CLANG_TIDY_PRG}
+  FILES ${NVIM_SOURCES} ${NVIM_HEADERS}
+  FLAGS --quiet
+  EXCLUDE ${EXCLUDE_CLANG_TIDY})
+add_custom_target(copy_compile_commands
+  COMMAND ${CMAKE_COMMAND} -E copy ${PROJECT_BINARY_DIR}/compile_commands.json ${PROJECT_SOURCE_DIR}/compile_commands.json)
+add_dependencies(copy_compile_commands nvim)
+add_dependencies(clang-tidy copy_compile_commands)
 
 if(CI_BUILD)
   set(LINT_OUTPUT_FORMAT gh_action)
 else()
   set(LINT_OUTPUT_FORMAT vs7)
 endif()
-
 add_glob_target(
   TARGET lintc-clint
   COMMAND ${PROJECT_SOURCE_DIR}/src/clint.py

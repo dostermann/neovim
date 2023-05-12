@@ -483,6 +483,7 @@ local function next_diagnostic(position, search_forward, bufnr, opts, namespace)
   local diagnostics =
     get_diagnostics(bufnr, vim.tbl_extend('keep', opts, { namespace = namespace }), true)
   local line_diagnostics = diagnostic_lines(diagnostics)
+
   for i = 0, line_count do
     local offset = i * (search_forward and 1 or -1)
     local lnum = position[1] + offset
@@ -599,7 +600,10 @@ end
 ---                                 means to always show the diagnostic source.
 ---                       * spacing: (number) Amount of empty spaces inserted at the beginning
 ---                                  of the virtual text.
----                       * prefix: (string) Prepend diagnostic message with prefix.
+---                       * prefix: (string or function) prepend diagnostic message with prefix.
+---                                 If a function, it must have the signature (diagnostic) -> string,
+---                                 where {diagnostic} is of type |diagnostic-structure|. This can be
+---                                 used to render diagnostic symbols or error codes.
 ---                       * suffix: (string or function) Append diagnostic message with suffix.
 ---                                 If a function, it must have the signature (diagnostic) ->
 ---                                 string, where {diagnostic} is of type |diagnostic-structure|.
@@ -630,7 +634,7 @@ end
 ---                         Options:
 ---                         * reverse: (boolean) Reverse sort order
 ---
----@param namespace number|nil Update the options for the given namespace. When omitted, update the
+---@param namespace integer|nil Update the options for the given namespace. When omitted, update the
 ---                            global diagnostic options.
 function M.config(opts, namespace)
   vim.validate({
@@ -674,8 +678,8 @@ end
 
 --- Set diagnostics for the given namespace and buffer.
 ---
----@param namespace number The diagnostic namespace
----@param bufnr number Buffer number
+---@param namespace integer The diagnostic namespace
+---@param bufnr integer Buffer number
 ---@param diagnostics table A list of diagnostic items |diagnostic-structure|
 ---@param opts table|nil Display options to pass to |vim.diagnostic.show()|
 function M.set(namespace, bufnr, diagnostics, opts)
@@ -711,7 +715,7 @@ end
 
 --- Get namespace metadata.
 ---
----@param namespace number Diagnostic namespace
+---@param namespace integer Diagnostic namespace
 ---@return table Namespace metadata
 function M.get_namespace(namespace)
   vim.validate({ namespace = { namespace, 'n' } })
@@ -743,20 +747,21 @@ function M.get_namespaces()
 end
 
 ---@class Diagnostic
----@field buffer number
----@field lnum number 0-indexed
----@field end_lnum nil|number 0-indexed
----@field col number 0-indexed
----@field end_col nil|number 0-indexed
+---@field bufnr integer
+---@field lnum integer 0-indexed
+---@field end_lnum nil|integer 0-indexed
+---@field col integer 0-indexed
+---@field end_col nil|integer 0-indexed
 ---@field severity DiagnosticSeverity
 ---@field message string
 ---@field source nil|string
 ---@field code nil|string
+---@field _tags { deprecated: boolean, unnecessary: boolean}
 ---@field user_data nil|any arbitrary data plugins can add
 
 --- Get current diagnostics.
 ---
----@param bufnr number|nil Buffer number to get diagnostics from. Use 0 for
+---@param bufnr integer|nil Buffer number to get diagnostics from. Use 0 for
 ---                        current buffer or nil for all buffers.
 ---@param opts table|nil A table with the following keys:
 ---                        - namespace: (number) Limit diagnostics to the given namespace.
@@ -948,6 +953,16 @@ M.handlers.underline = {
         higroup = underline_highlight_map.Error
       end
 
+      if diagnostic._tags then
+        -- TODO(lewis6991): we should be able to stack these.
+        if diagnostic._tags.unnecessary then
+          higroup = 'DiagnosticUnnecessary'
+        end
+        if diagnostic._tags.deprecated then
+          higroup = 'DiagnosticDeprecated'
+        end
+      end
+
       vim.highlight.range(
         bufnr,
         underline_ns,
@@ -1054,8 +1069,15 @@ function M._get_virt_text_chunks(line_diags, opts)
   -- Create a little more space between virtual text and contents
   local virt_texts = { { string.rep(' ', spacing) } }
 
-  for i = 1, #line_diags - 1 do
-    table.insert(virt_texts, { prefix, virtual_text_highlight_map[line_diags[i].severity] })
+  for i = 1, #line_diags do
+    local resolved_prefix = prefix
+    if type(prefix) == 'function' then
+      resolved_prefix = prefix(line_diags[i]) or ''
+    end
+    table.insert(
+      virt_texts,
+      { resolved_prefix, virtual_text_highlight_map[line_diags[i].severity] }
+    )
   end
   local last = line_diags[#line_diags]
 
@@ -1066,7 +1088,7 @@ function M._get_virt_text_chunks(line_diags, opts)
       suffix = suffix(last) or ''
     end
     table.insert(virt_texts, {
-      string.format('%s %s%s', prefix, last.message:gsub('\r', ''):gsub('\n', '  '), suffix),
+      string.format(' %s%s', last.message:gsub('\r', ''):gsub('\n', '  '), suffix),
       virtual_text_highlight_map[last.severity],
     })
 
@@ -1083,9 +1105,9 @@ end
 --- To hide diagnostics and prevent them from re-displaying, use
 --- |vim.diagnostic.disable()|.
 ---
----@param namespace number|nil Diagnostic namespace. When omitted, hide
+---@param namespace integer|nil Diagnostic namespace. When omitted, hide
 ---                            diagnostics from all namespaces.
----@param bufnr number|nil Buffer number, or 0 for current buffer. When
+---@param bufnr integer|nil Buffer number, or 0 for current buffer. When
 ---                        omitted, hide diagnostics in all buffers.
 function M.hide(namespace, bufnr)
   vim.validate({
@@ -1108,8 +1130,8 @@ end
 
 --- Check whether diagnostics are disabled in a given buffer.
 ---
----@param bufnr number|nil Buffer number, or 0 for current buffer.
----@param namespace number|nil Diagnostic namespace. When omitted, checks if
+---@param bufnr integer|nil Buffer number, or 0 for current buffer.
+---@param namespace integer|nil Diagnostic namespace. When omitted, checks if
 ---                            all diagnostics are disabled in {bufnr}.
 ---                            Otherwise, only checks if diagnostics from
 ---                            {namespace} are disabled.
@@ -1129,9 +1151,9 @@ end
 
 --- Display diagnostics for the given namespace and buffer.
 ---
----@param namespace number|nil Diagnostic namespace. When omitted, show
+---@param namespace integer|nil Diagnostic namespace. When omitted, show
 ---                            diagnostics from all namespaces.
----@param bufnr number|nil Buffer number, or 0 for current buffer. When omitted, show
+---@param bufnr integer|nil Buffer number, or 0 for current buffer. When omitted, show
 ---                        diagnostics in all buffers.
 ---@param diagnostics table|nil The diagnostics to display. When omitted, use the
 ---                             saved diagnostics for the given namespace and
@@ -1256,7 +1278,7 @@ end
 ---                      Overrides the setting from |vim.diagnostic.config()|.
 ---            - suffix: Same as {prefix}, but appends the text to the diagnostic instead of
 ---                      prepending it. Overrides the setting from |vim.diagnostic.config()|.
----@return number|nil, number|nil: ({float_bufnr}, {win_id})
+---@return integer|nil, integer|nil: ({float_bufnr}, {win_id})
 function M.open_float(opts, ...)
   -- Support old (bufnr, opts) signature
   local bufnr
@@ -1463,9 +1485,9 @@ end
 --- simply remove diagnostic decorations in a way that they can be
 --- re-displayed, use |vim.diagnostic.hide()|.
 ---
----@param namespace number|nil Diagnostic namespace. When omitted, remove
+---@param namespace integer|nil Diagnostic namespace. When omitted, remove
 ---                            diagnostics from all namespaces.
----@param bufnr number|nil Remove diagnostics for the given buffer. When omitted,
+---@param bufnr integer|nil Remove diagnostics for the given buffer. When omitted,
 ---             diagnostics are removed for all buffers.
 function M.reset(namespace, bufnr)
   vim.validate({
@@ -1518,9 +1540,9 @@ end
 
 --- Disable diagnostics in the given buffer.
 ---
----@param bufnr number|nil Buffer number, or 0 for current buffer. When
+---@param bufnr integer|nil Buffer number, or 0 for current buffer. When
 ---                        omitted, disable diagnostics in all buffers.
----@param namespace number|nil Only disable diagnostics for the given namespace.
+---@param namespace integer|nil Only disable diagnostics for the given namespace.
 function M.disable(bufnr, namespace)
   vim.validate({ bufnr = { bufnr, 'n', true }, namespace = { namespace, 'n', true } })
   if bufnr == nil then
@@ -1555,9 +1577,9 @@ end
 
 --- Enable diagnostics in the given buffer.
 ---
----@param bufnr number|nil Buffer number, or 0 for current buffer. When
+---@param bufnr integer|nil Buffer number, or 0 for current buffer. When
 ---                        omitted, enable diagnostics in all buffers.
----@param namespace number|nil Only enable diagnostics for the given namespace.
+---@param namespace integer|nil Only enable diagnostics for the given namespace.
 function M.enable(bufnr, namespace)
   vim.validate({ bufnr = { bufnr, 'n', true }, namespace = { namespace, 'n', true } })
   if bufnr == nil then

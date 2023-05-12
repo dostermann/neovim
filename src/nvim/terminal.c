@@ -82,7 +82,6 @@
 #include "nvim/option.h"
 #include "nvim/optionstr.h"
 #include "nvim/pos.h"
-#include "nvim/screen.h"
 #include "nvim/state.h"
 #include "nvim/terminal.h"
 #include "nvim/types.h"
@@ -597,7 +596,7 @@ static int terminal_execute(VimState *state, int key)
     break;
 
   case K_LUA:
-    map_execute_lua();
+    map_execute_lua(false);
     break;
 
   case Ctrl_N:
@@ -681,7 +680,7 @@ void terminal_send(Terminal *term, char *data, size_t size)
 
 static bool is_filter_char(int c)
 {
-  unsigned int flag = 0;
+  unsigned flag = 0;
   switch (c) {
   case 0x08:
     flag = TPF_BS;
@@ -724,7 +723,11 @@ void terminal_paste(long count, char **y_array, size_t y_size)
     for (size_t j = 0; j < y_size; j++) {
       if (j) {
         // terminate the previous line
+#ifdef MSWIN
+        terminal_send(curbuf->terminal, "\r\n", 2);
+#else
         terminal_send(curbuf->terminal, "\n", 1);
+#endif
       }
       size_t len = strlen(y_array[j]);
       if (len > buff_len) {
@@ -836,7 +839,7 @@ void terminal_get_line_attributes(Terminal *term, win_T *wp, int linenr, int *te
                    | (cell.attrs.italic ? HL_ITALIC : 0)
                    | (cell.attrs.reverse ? HL_INVERSE : 0)
                    | get_underline_hl_flag(cell.attrs)
-                   | (cell.attrs.strike ? HL_STRIKETHROUGH: 0)
+                   | (cell.attrs.strike ? HL_STRIKETHROUGH : 0)
                    | ((fg_indexed && !fg_set) ? HL_FG_INDEXED : 0)
                    | ((bg_indexed && !bg_set) ? HL_BG_INDEXED : 0);
 
@@ -893,13 +896,13 @@ static int term_moverect(VTermRect dest, VTermRect src, void *data)
   return 1;
 }
 
-static int term_movecursor(VTermPos new, VTermPos old, int visible, void *data)
+static int term_movecursor(VTermPos new_pos, VTermPos old_pos, int visible, void *data)
 {
   Terminal *term = data;
-  term->cursor.row = new.row;
-  term->cursor.col = new.col;
-  invalidate_terminal(term, old.row, old.row + 1);
-  invalidate_terminal(term, new.row, new.row + 1);
+  term->cursor.row = new_pos.row;
+  term->cursor.col = new_pos.col;
+  invalidate_terminal(term, old_pos.row, old_pos.row + 1);
+  invalidate_terminal(term, new_pos.row, new_pos.row + 1);
   return 1;
 }
 

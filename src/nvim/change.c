@@ -42,7 +42,6 @@
 #include "nvim/os/time.h"
 #include "nvim/plines.h"
 #include "nvim/pos.h"
-#include "nvim/screen.h"
 #include "nvim/search.h"
 #include "nvim/state.h"
 #include "nvim/strings.h"
@@ -248,11 +247,24 @@ static void changed_common(linenr_T lnum, colnr_T col, linenr_T lnume, linenr_T 
         wp->w_redr_type = UPD_VALID;
       }
 
+      linenr_T last = lnume + xtra - 1;  // last line after the change
+
+      // Reset "w_skipcol" if the topline length has become smaller to
+      // such a degree that nothing will be visible anymore, accounting
+      // for 'smoothscroll' <<< or 'listchars' "precedes" marker.
+      if (wp->w_skipcol > 0
+          && (last < wp->w_topline
+              || (wp->w_topline >= lnum
+                  && wp->w_topline < lnume
+                  && win_linetabsize(wp, wp->w_topline, ml_get(wp->w_topline), (colnr_T)MAXCOL)
+                  <= (unsigned)wp->w_skipcol + (wp->w_p_list && wp->w_p_lcs_chars.prec ? 1 : 3)))) {
+        wp->w_skipcol = 0;
+      }
+
       // Check if a change in the buffer has invalidated the cached
       // values for the cursor.
       // Update the folds for this window.  Can't postpone this, because
       // a following operator might work on the whole fold: ">>dd".
-      linenr_T last = lnume + xtra - 1;  // last line after the change
       foldUpdate(wp, lnum, last);
 
       // The change may cause lines above or below the change to become
@@ -296,7 +308,9 @@ static void changed_common(linenr_T lnum, colnr_T col, linenr_T lnume, linenr_T 
       for (int i = 0; i < wp->w_lines_valid; i++) {
         if (wp->w_lines[i].wl_valid) {
           if (wp->w_lines[i].wl_lnum >= lnum) {
-            if (wp->w_lines[i].wl_lnum < lnume) {
+            // Do not change wl_lnum at index zero, it is used to
+            // compare with w_topline.  Invalidate it instead.
+            if (wp->w_lines[i].wl_lnum < lnume || i == 0) {
               // line included in change
               wp->w_lines[i].wl_valid = false;
             } else if (xtra != 0) {
@@ -398,13 +412,13 @@ void changed_bytes(linenr_T lnum, colnr_T col)
 /// insert/delete bytes at column
 ///
 /// Like changed_bytes() but also adjust extmark for "new" bytes.
-void inserted_bytes(linenr_T lnum, colnr_T col, int old, int new)
+void inserted_bytes(linenr_T lnum, colnr_T start_col, int old_col, int new_col)
 {
   if (curbuf_splice_pending == 0) {
-    extmark_splice_cols(curbuf, (int)lnum - 1, col, old, new, kExtmarkUndo);
+    extmark_splice_cols(curbuf, (int)lnum - 1, start_col, old_col, new_col, kExtmarkUndo);
   }
 
-  changed_bytes(lnum, col);
+  changed_bytes(lnum, start_col);
 }
 
 /// Appended "count" lines below line "lnum" in the current buffer.
@@ -445,6 +459,7 @@ void deleted_lines_mark(linenr_T lnum, long count)
 }
 
 /// Marks the area to be redrawn after a change.
+/// Consider also calling changed_line_display_buf().
 ///
 /// @param buf the buffer where lines were changed
 /// @param lnum first line with change
@@ -709,8 +724,7 @@ void ins_char_bytes(char *buf, size_t charlen)
   // Copy bytes after the changed character(s).
   char *p = newp + col;
   if (linelen > col + oldlen) {
-    memmove(p + newlen, oldp + col + oldlen,
-            (size_t)(linelen - col - oldlen));
+    memmove(p + newlen, oldp + col + oldlen, linelen - col - oldlen);
   }
 
   // Insert or overwrite the new character.
@@ -949,7 +963,7 @@ int copy_indent(int size, char *src)
 
     // Add tabs required for indent.
     if (!curbuf->b_p_et) {
-      for (;;) {
+      while (true) {
         tab_pad = tabstop_padding(ind_col,
                                   curbuf->b_p_ts,
                                   curbuf->b_p_vts_array);
@@ -1160,12 +1174,16 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
               if (p[0] == '/' && p[-1] == '*') {
                 // End of C comment, indent should line up
                 // with the line containing the start of
-                // the comment
+                // the comment.
                 curwin->w_cursor.col = (colnr_T)(p - ptr);
                 if ((pos = findmatch(NULL, NUL)) != NULL) {
                   curwin->w_cursor.lnum = pos->lnum;
                   newindent = get_indent();
+                  break;
                 }
+                // this may make "ptr" invalid, get it again
+                ptr = ml_get(curwin->w_cursor.lnum);
+                p = ptr + curwin->w_cursor.col;
               }
             }
           }
@@ -1305,7 +1323,7 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
           }
 
           // find start of middle part
-          (void)copy_option_part(&p, (char *)lead_middle, COM_MAX_LEN, ",");
+          (void)copy_option_part(&p, lead_middle, COM_MAX_LEN, ",");
           require_blank = false;
         }
 
@@ -1316,7 +1334,7 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
           }
           p++;
         }
-        (void)copy_option_part(&p, (char *)lead_middle, COM_MAX_LEN, ",");
+        (void)copy_option_part(&p, lead_middle, COM_MAX_LEN, ",");
 
         while (*p && p[-1] != ':') {  // find end of end flags
           // Check whether we allow automatic ending of comments
@@ -1325,7 +1343,7 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
           }
           p++;
         }
-        size_t n = copy_option_part(&p, (char *)lead_end, COM_MAX_LEN, ",");
+        size_t n = copy_option_part(&p, lead_end, COM_MAX_LEN, ",");
 
         if (end_comment_pending == -1) {  // we can set it now
           end_comment_pending = (unsigned char)lead_end[n - 1];
@@ -1346,7 +1364,7 @@ int open_line(int dir, int flags, int second_line_indent, bool *did_do_comment)
         // Doing "o" on a start of comment inserts the middle leader.
         if (lead_len > 0) {
           if (current_flag == COM_START) {
-            lead_repl = (char *)lead_middle;
+            lead_repl = lead_middle;
             lead_repl_len = (int)strlen(lead_middle);
           }
 

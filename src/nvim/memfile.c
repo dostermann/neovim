@@ -70,6 +70,8 @@
 # include "memfile.c.generated.h"
 #endif
 
+static const char e_block_was_not_locked[] = N_("E293: Block was not locked");
+
 /// Open a new or existing memory block file.
 ///
 /// @param fname  Name of file to use.
@@ -300,7 +302,12 @@ bhdr_T *mf_get(memfile_T *mfp, blocknr_T nr, unsigned page_count)
 
     // could check here if the block is in the free list
 
-    hp = mf_alloc_bhdr(mfp, page_count);
+    if (page_count > 0) {
+      hp = mf_alloc_bhdr(mfp, page_count);
+    }
+    if (hp == NULL) {
+      return NULL;
+    }
 
     hp->bh_bnum = nr;
     hp->bh_flags = 0;
@@ -330,7 +337,7 @@ void mf_put(memfile_T *mfp, bhdr_T *hp, bool dirty, bool infile)
   unsigned flags = hp->bh_flags;
 
   if ((flags & BH_LOCKED) == 0) {
-    iemsg(_("E293: block was not locked"));
+    iemsg(_(e_block_was_not_locked));
   }
   flags &= ~BH_LOCKED;
   if (dirty) {
@@ -603,11 +610,9 @@ static int mf_read(memfile_T *mfp, bhdr_T *hp)
 static int mf_write(memfile_T *mfp, bhdr_T *hp)
 {
   off_T offset;             // offset in the file
-  blocknr_T nr;             // block nr which is being written
   bhdr_T *hp2;
   unsigned page_size;       // number of bytes in a page
   unsigned page_count;      // number of pages written
-  unsigned size;            // number of bytes written
 
   if (mfp->mf_fd < 0) {     // there is no file, can't write
     return FAIL;
@@ -625,8 +630,8 @@ static int mf_write(memfile_T *mfp, bhdr_T *hp)
   /// to extend the file.
   /// If block 'mf_infile_count' is not in the hash list, it has been
   /// freed. Fill the space in the file with data from the current block.
-  for (;;) {
-    nr = hp->bh_bnum;
+  while (true) {
+    blocknr_T nr = hp->bh_bnum;  // block nr which is being written
     if (nr > mfp->mf_infile_count) {            // beyond end of file
       nr = mfp->mf_infile_count;
       hp2 = mf_find_hash(mfp, nr);              // NULL caught below
@@ -645,7 +650,7 @@ static int mf_write(memfile_T *mfp, bhdr_T *hp)
     } else {
       page_count = hp2->bh_page_count;
     }
-    size = page_size * page_count;
+    unsigned size = page_size * page_count;  // number of bytes written
     void *data = (hp2 == NULL) ? hp->bh_data : hp2->bh_data;
     if ((unsigned)write_eintr(mfp->mf_fd, data, size) != size) {
       /// Avoid repeating the error message, this mostly happens when the
@@ -802,7 +807,7 @@ static bool mf_do_open(memfile_T *mfp, char *fname, int flags)
     emsg(_("E300: Swap file already exists (symlink attack?)"));
   } else {
     // try to open the file
-    mfp->mf_fd = MCH_OPEN_RW((char *)mfp->mf_fname, flags | O_NOFOLLOW);
+    mfp->mf_fd = MCH_OPEN_RW(mfp->mf_fname, flags | O_NOFOLLOW);
   }
 
   // If the file cannot be opened, use memory only

@@ -50,8 +50,8 @@
 /// The character for each menu mode
 static char *menu_mode_chars[] = { "n", "v", "s", "o", "i", "c", "tl", "t" };
 
-static char e_notsubmenu[] = N_("E327: Part of menu-item path is not sub-menu");
-static char e_nomenu[] = N_("E329: No menu \"%s\"");
+static const char e_notsubmenu[] = N_("E327: Part of menu-item path is not sub-menu");
+static const char e_nomenu[] = N_("E329: No menu \"%s\"");
 
 // Return true if "name" is a window toolbar menu name.
 static bool menu_is_winbar(const char *const name)
@@ -88,7 +88,7 @@ void ex_menu(exarg_T *eap)
   modes = get_menu_cmd_modes(eap->cmd, eap->forceit, &noremap, &unmenu);
   arg = eap->arg;
 
-  for (;;) {
+  while (true) {
     if (strncmp(arg, "<script>", 8) == 0) {
       noremap = REMAP_SCRIPT;
       arg = skipwhite(arg + 8);
@@ -281,7 +281,6 @@ static int add_menu_path(const char *const menu_path, vimmenu_T *menuarg, const 
   char *next_name;
   char c;
   char d;
-  int i;
   int pri_idx = 0;
   int old_modes = 0;
   int amenu;
@@ -411,7 +410,7 @@ static int add_menu_path(const char *const menu_path, vimmenu_T *menuarg, const 
     p = (call_data == NULL) ? NULL : xstrdup(call_data);
 
     // loop over all modes, may add more than one
-    for (i = 0; i < MENU_MODES; i++) {
+    for (int i = 0; i < MENU_MODES; i++) {
       if (modes & (1 << i)) {
         // free any old menu
         free_menu_string(menu, i);
@@ -560,7 +559,7 @@ static int remove_menu(vimmenu_T **menup, char *name, int modes, bool silent)
         }
       } else if (*name != NUL) {
         if (!silent) {
-          emsg(_(e_menuothermode));
+          emsg(_(e_menu_only_exists_in_another_mode));
         }
         return FAIL;
       }
@@ -617,10 +616,7 @@ static int remove_menu(vimmenu_T **menup, char *name, int modes, bool silent)
 // Free the given menu structure and remove it from the linked list.
 static void free_menu(vimmenu_T **menup)
 {
-  int i;
-  vimmenu_T *menu;
-
-  menu = *menup;
+  vimmenu_T *menu = *menup;
 
   // Don't change *menup until after calling gui_mch_destroy_menu(). The
   // MacOS code needs the original structure to properly delete the menu.
@@ -630,7 +626,7 @@ static void free_menu(vimmenu_T **menup)
   xfree(menu->en_name);
   xfree(menu->en_dname);
   xfree(menu->actext);
-  for (i = 0; i < MENU_MODES; i++) {
+  for (int i = 0; i < MENU_MODES; i++) {
     free_menu_string(menu, i);
   }
   xfree(menu);
@@ -640,9 +636,8 @@ static void free_menu(vimmenu_T **menup)
 static void free_menu_string(vimmenu_T *menu, int idx)
 {
   int count = 0;
-  int i;
 
-  for (i = 0; i < MENU_MODES; i++) {
+  for (int i = 0; i < MENU_MODES; i++) {
     if (menu->strings[i] == menu->strings[idx]) {
       count++;
     }
@@ -662,13 +657,11 @@ static void free_menu_string(vimmenu_T *menu, int idx)
 /// @see menu_get
 static dict_T *menu_get_recursive(const vimmenu_T *menu, int modes)
 {
-  dict_T *dict;
-
   if (!menu || (menu->modes & modes) == 0x0) {
     return NULL;
   }
 
-  dict = tv_dict_alloc();
+  dict_T *dict = tv_dict_alloc();
   tv_dict_add_str(dict, S_LEN("name"), menu->dname);
   tv_dict_add_nr(dict, S_LEN("priority"), (int)menu->priority);
   tv_dict_add_nr(dict, S_LEN("hidden"), menu_is_hidden(menu->dname));
@@ -767,7 +760,7 @@ static vimmenu_T *find_menu(vimmenu_T *menu, char *name, int modes)
           emsg(_(e_notsubmenu));
           return NULL;
         } else if ((menu->modes & modes) == 0x0) {
-          emsg(_(e_menuothermode));
+          emsg(_(e_menu_only_exists_in_another_mode));
           return NULL;
         } else if (*p == NUL) {  // found a full match
           return menu;
@@ -815,7 +808,6 @@ static int show_menus(char *const path_name, int modes)
 static void show_menus_recursive(vimmenu_T *menu, int modes, int depth)
 {
   int i;
-  int bit;
 
   if (menu != NULL && (menu->modes & modes) == 0x0) {
     return;
@@ -838,7 +830,7 @@ static void show_menus_recursive(vimmenu_T *menu, int modes, int depth)
   }
 
   if (menu != NULL && menu->children == NULL) {
-    for (bit = 0; bit < MENU_MODES; bit++) {
+    for (int bit = 0; bit < MENU_MODES; bit++) {
       if ((menu->modes & modes & (1 << bit)) != 0) {
         msg_putchar('\n');
         if (got_int) {                  // "q" hit for "--more--"
@@ -902,7 +894,6 @@ char *set_context_in_menu_cmd(expand_T *xp, const char *cmd, char *arg, bool for
   char *after_dot;
   char *p;
   char *path_name = NULL;
-  char *name;
   int unmenu;
   vimmenu_T *menu;
   int expand_menus;
@@ -963,7 +954,7 @@ char *set_context_in_menu_cmd(expand_T *xp, const char *cmd, char *arg, bool for
       path_name = xmalloc(path_len);
       xstrlcpy(path_name, arg, path_len);
     }
-    name = path_name;
+    char *name = path_name;
     while (name != NULL && *name) {
       p = menu_name_skip(name);
       while (menu != NULL) {
@@ -1352,7 +1343,7 @@ static char *menu_text(const char *str, int *mnemonic, char **actext)
 bool menu_is_menubar(const char *const name)
   FUNC_ATTR_PURE FUNC_ATTR_WARN_UNUSED_RESULT FUNC_ATTR_NONNULL_ALL
 {
-  return !menu_is_popup((char *)name)
+  return !menu_is_popup(name)
          && !menu_is_toolbar(name)
          && !menu_is_winbar(name)
          && *name != MNU_HIDDEN_CHAR;
@@ -1459,7 +1450,8 @@ void show_popupmenu(void)
 
 /// Execute "menu".  Use by ":emenu" and the window toolbar.
 /// @param eap  NULL for the window toolbar.
-/// @param mode_idx  specify a MENU_INDEX_ value, use -1 to depend on the current state
+/// @param mode_idx  specify a MENU_INDEX_ value,
+///                  use MENU_INDEX_INVALID to depend on the current state
 void execute_menu(const exarg_T *eap, vimmenu_T *menu, int mode_idx)
   FUNC_ATTR_NONNULL_ARG(2)
 {
@@ -1467,7 +1459,7 @@ void execute_menu(const exarg_T *eap, vimmenu_T *menu, int mode_idx)
 
   if (idx < 0) {
     // Use the Insert mode entry when returning to Insert mode.
-    if (((State & MODE_INSERT) || restart_edit) && !current_sctx.sc_sid) {
+    if (((State & MODE_INSERT) || restart_edit) && current_sctx.sc_sid == 0) {
       idx = MENU_INDEX_INSERT;
     } else if (State & MODE_CMDLINE) {
       idx = MENU_INDEX_CMDLINE;
@@ -1621,7 +1613,7 @@ static vimmenu_T *menu_getbyname(char *name_arg)
 void ex_emenu(exarg_T *eap)
 {
   char *arg = eap->arg;
-  int mode_idx = -1;
+  int mode_idx = MENU_INDEX_INVALID;
 
   if (arg[0] && ascii_iswhite(arg[1])) {
     switch (arg[0]) {

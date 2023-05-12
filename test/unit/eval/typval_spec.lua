@@ -1461,18 +1461,18 @@ describe('typval.c', function()
         itp('fails with error message when index is out of range', function()
           local l = list(int(1), int(2), int(3), int(4), int(5))
 
-          eq(nil, tv_list_find_str(l, -6, 'E684: list index out of range: -6'))
-          eq(nil, tv_list_find_str(l, 5, 'E684: list index out of range: 5'))
+          eq(nil, tv_list_find_str(l, -6, 'E684: List index out of range: -6'))
+          eq(nil, tv_list_find_str(l, 5, 'E684: List index out of range: 5'))
         end)
         itp('fails with error message on invalid types', function()
           local l = list(1, empty_list, {})
 
-          eq('', tv_list_find_str(l, 0, 'E806: using Float as a String'))
-          eq('', tv_list_find_str(l, 1, 'E730: using List as a String'))
-          eq('', tv_list_find_str(l, 2, 'E731: using Dictionary as a String'))
-          eq('', tv_list_find_str(l, -1, 'E731: using Dictionary as a String'))
-          eq('', tv_list_find_str(l, -2, 'E730: using List as a String'))
-          eq('', tv_list_find_str(l, -3, 'E806: using Float as a String'))
+          eq('', tv_list_find_str(l, 0, 'E806: Using a Float as a String'))
+          eq('', tv_list_find_str(l, 1, 'E730: Using a List as a String'))
+          eq('', tv_list_find_str(l, 2, 'E731: Using a Dictionary as a String'))
+          eq('', tv_list_find_str(l, -1, 'E731: Using a Dictionary as a String'))
+          eq('', tv_list_find_str(l, -2, 'E730: Using a List as a String'))
+          eq('', tv_list_find_str(l, -3, 'E806: Using a Float as a String'))
         end)
       end)
     end)
@@ -1653,7 +1653,7 @@ describe('typval.c', function()
           eq(OK, lib.tv_dict_add(d, di))
           alloc_log:check({})
           eq(FAIL, check_emsg(function() return lib.tv_dict_add(d, di) end,
-                              'E685: Internal error: hash_add()'))
+                              'E685: Internal error: hash_add(): duplicate key ""'))
           alloc_log:clear()
           lib.tv_dict_item_remove(d, di)
           alloc_log:check({
@@ -1745,7 +1745,7 @@ describe('typval.c', function()
         itp('works', function()
           local d = ffi.gc(dict({test={}}), nil)
           eq('', ffi.string(check_emsg(function() return lib.tv_dict_get_string(d, 'test', false) end,
-                                       'E731: using Dictionary as a String')))
+                                       'E731: Using a Dictionary as a String')))
           d = ffi.gc(dict({tes=int(42), t=44, te='43', xx=int(45)}), nil)
           alloc_log:clear()
           local dis = dict_items(d)
@@ -1766,7 +1766,7 @@ describe('typval.c', function()
           eq(s43, dis.te.di_tv.vval.v_string)
           alloc_log:check({})
           eq('', ffi.string(check_emsg(function() return lib.tv_dict_get_string(d, 't', false) end,
-                                       'E806: using Float as a String')))
+                                       'E806: Using a Float as a String')))
         end)
         itp('allocates a string copy when requested', function()
           local function tv_dict_get_string_alloc(d, key, emsg)
@@ -1785,14 +1785,14 @@ describe('typval.c', function()
             return s_ret
           end
           local d = ffi.gc(dict({test={}}), nil)
-          eq('', tv_dict_get_string_alloc(d, 'test', 'E731: using Dictionary as a String'))
+          eq('', tv_dict_get_string_alloc(d, 'test', 'E731: Using a Dictionary as a String'))
           d = ffi.gc(dict({tes=int(42), t=44, te='43', xx=int(45)}), nil)
           alloc_log:clear()
           eq(nil, tv_dict_get_string_alloc(d, 'test'))
           eq('42', tv_dict_get_string_alloc(d, 'tes'))
           eq('45', tv_dict_get_string_alloc(d, 'xx'))
           eq('43', tv_dict_get_string_alloc(d, 'te'))
-          eq('', tv_dict_get_string_alloc(d, 't', 'E806: using Float as a String'))
+          eq('', tv_dict_get_string_alloc(d, 't', 'E806: Using a Float as a String'))
         end)
       end)
       describe('get_string_buf()', function()
@@ -1827,7 +1827,7 @@ describe('typval.c', function()
           s, r, b = tv_dict_get_string_buf(d, 'test')
           neq(r, b)
           eq('tset', s)
-          s, r, b = tv_dict_get_string_buf(d, 't', nil, 'E806: using Float as a String')
+          s, r, b = tv_dict_get_string_buf(d, 't', nil, 'E806: Using a Float as a String')
           neq(r, b)
           eq('', s)
           s, r, b = tv_dict_get_string_buf(d, 'te')
@@ -1870,7 +1870,7 @@ describe('typval.c', function()
           neq(r, b)
           neq(r, def)
           eq('tset', s)
-          s, r, b, def = tv_dict_get_string_buf_chk(d, 'test', 1, nil, nil, 'E806: using Float as a String')
+          s, r, b, def = tv_dict_get_string_buf_chk(d, 'test', 1, nil, nil, 'E806: Using a Float as a String')
           neq(r, b)
           neq(r, def)
           eq(nil, s)
@@ -1947,7 +1947,7 @@ describe('typval.c', function()
           alloc_log:check({})
           eq({test=10, ['t-est']=int(42)}, dct2tbl(d))
           eq(FAIL, check_emsg(function() return lib.tv_dict_add(d, di) end,
-                              'E685: Internal error: hash_add()'))
+                              'E685: Internal error: hash_add(): duplicate key "t-est"'))
         end)
       end)
       describe('list()', function()
@@ -1964,7 +1964,7 @@ describe('typval.c', function()
           eq({test=10, tes={1, 2, 3}}, dct2tbl(d))
           eq(2, l.lv_refcount)
           eq(FAIL, check_emsg(function() return lib.tv_dict_add_list(d, 'testt', 3, l) end,
-                              'E685: Internal error: hash_add()'))
+                              'E685: Internal error: hash_add(): duplicate key "tes"'))
           eq(2, l.lv_refcount)
           alloc_log:clear()
           lib.emsg_skip = lib.emsg_skip + 1
@@ -1990,7 +1990,7 @@ describe('typval.c', function()
           eq({test=10, tes={foo=42}}, dct2tbl(d))
           eq(2, d2.dv_refcount)
           eq(FAIL, check_emsg(function() return lib.tv_dict_add_dict(d, 'testt', 3, d2) end,
-                              'E685: Internal error: hash_add()'))
+                              'E685: Internal error: hash_add(): duplicate key "tes"'))
           eq(2, d2.dv_refcount)
           alloc_log:clear()
           lib.emsg_skip = lib.emsg_skip + 1
@@ -2012,7 +2012,7 @@ describe('typval.c', function()
           alloc_log:check({a.di(dis.tes, 'tes')})
           eq({test=10, tes=int(2)}, dct2tbl(d))
           eq(FAIL, check_emsg(function() return lib.tv_dict_add_nr(d, 'testt', 3, 2) end,
-                              'E685: Internal error: hash_add()'))
+                              'E685: Internal error: hash_add(): duplicate key "tes"'))
           alloc_log:clear()
           lib.emsg_skip = lib.emsg_skip + 1
           eq(FAIL, check_emsg(function() return lib.tv_dict_add_nr(d, 'testt', 3, 2) end,
@@ -2032,7 +2032,7 @@ describe('typval.c', function()
           alloc_log:check({a.di(dis.tes, 'tes')})
           eq({test=10, tes=1.5}, dct2tbl(d))
           eq(FAIL, check_emsg(function() return lib.tv_dict_add_float(d, 'testt', 3, 1.5) end,
-                              'E685: Internal error: hash_add()'))
+                              'E685: Internal error: hash_add(): duplicate key "tes"'))
           alloc_log:clear()
           lib.emsg_skip = lib.emsg_skip + 1
           eq(FAIL, check_emsg(function() return lib.tv_dict_add_float(d, 'testt', 3, 1.5) end,
@@ -2055,7 +2055,7 @@ describe('typval.c', function()
           })
           eq({test=10, tes='TEST'}, dct2tbl(d))
           eq(FAIL, check_emsg(function() return lib.tv_dict_add_str(d, 'testt', 3, 'TEST') end,
-                              'E685: Internal error: hash_add()'))
+                              'E685: Internal error: hash_add(): duplicate key "tes"'))
           alloc_log:clear()
           lib.emsg_skip = lib.emsg_skip + 1
           eq(FAIL, check_emsg(function() return lib.tv_dict_add_str(d, 'testt', 3, 'TEST') end,
@@ -2085,7 +2085,7 @@ describe('typval.c', function()
           })
           eq({test=10, tes='TEST'}, dct2tbl(d))
           eq(FAIL, check_emsg(function() return lib.tv_dict_add_allocated_str(d, 'testt', 3, s2) end,
-                              'E685: Internal error: hash_add()'))
+                              'E685: Internal error: hash_add(): duplicate key "tes"'))
           alloc_log:clear()
           lib.emsg_skip = lib.emsg_skip + 1
           eq(FAIL, check_emsg(function() return lib.tv_dict_add_allocated_str(d, 'testt', 3, s3) end,
@@ -2831,14 +2831,14 @@ describe('typval.c', function()
           alloc_log:clear()
           for _, v in ipairs({
             {lib.VAR_NUMBER, nil},
-            {lib.VAR_FLOAT, 'E806: using Float as a String'},
-            {lib.VAR_PARTIAL, 'E729: using Funcref as a String'},
-            {lib.VAR_FUNC, 'E729: using Funcref as a String'},
-            {lib.VAR_LIST, 'E730: using List as a String'},
-            {lib.VAR_DICT, 'E731: using Dictionary as a String'},
+            {lib.VAR_FLOAT, 'E806: Using a Float as a String'},
+            {lib.VAR_PARTIAL, 'E729: Using a Funcref as a String'},
+            {lib.VAR_FUNC, 'E729: Using a Funcref as a String'},
+            {lib.VAR_LIST, 'E730: Using a List as a String'},
+            {lib.VAR_DICT, 'E731: Using a Dictionary as a String'},
             {lib.VAR_BOOL, nil},
             {lib.VAR_SPECIAL, nil},
-            {lib.VAR_UNKNOWN, 'E908: using an invalid value as a String'},
+            {lib.VAR_UNKNOWN, 'E908: Using an invalid value as a String'},
           }) do
             local typ = v[1]
             local emsg = v[2]
@@ -2986,15 +2986,15 @@ describe('typval.c', function()
           for _, v in ipairs({
             {lib.VAR_NUMBER, {v_number=42}, nil, '42'},
             {lib.VAR_STRING, {v_string=to_cstr('100500')}, nil, '100500'},
-            {lib.VAR_FLOAT, {v_float=42.53}, 'E806: using Float as a String', ''},
-            {lib.VAR_PARTIAL, {v_partial=NULL}, 'E729: using Funcref as a String', ''},
-            {lib.VAR_FUNC, {v_string=NULL}, 'E729: using Funcref as a String', ''},
-            {lib.VAR_LIST, {v_list=NULL}, 'E730: using List as a String', ''},
-            {lib.VAR_DICT, {v_dict=NULL}, 'E731: using Dictionary as a String', ''},
+            {lib.VAR_FLOAT, {v_float=42.53}, 'E806: Using a Float as a String', ''},
+            {lib.VAR_PARTIAL, {v_partial=NULL}, 'E729: Using a Funcref as a String', ''},
+            {lib.VAR_FUNC, {v_string=NULL}, 'E729: Using a Funcref as a String', ''},
+            {lib.VAR_LIST, {v_list=NULL}, 'E730: Using a List as a String', ''},
+            {lib.VAR_DICT, {v_dict=NULL}, 'E731: Using a Dictionary as a String', ''},
             {lib.VAR_SPECIAL, {v_special=lib.kSpecialVarNull}, nil, 'v:null'},
             {lib.VAR_BOOL, {v_bool=lib.kBoolVarTrue}, nil, 'v:true'},
             {lib.VAR_BOOL, {v_bool=lib.kBoolVarFalse}, nil, 'v:false'},
-            {lib.VAR_UNKNOWN, nil, 'E908: using an invalid value as a String', ''},
+            {lib.VAR_UNKNOWN, nil, 'E908: Using an invalid value as a String', ''},
           }) do
             -- Using to_cstr in place of Neovim allocated string, cannot
             -- tv_clear() that.
@@ -3030,15 +3030,15 @@ describe('typval.c', function()
           for _, v in ipairs({
             {lib.VAR_NUMBER, {v_number=42}, nil, '42'},
             {lib.VAR_STRING, {v_string=to_cstr('100500')}, nil, '100500'},
-            {lib.VAR_FLOAT, {v_float=42.53}, 'E806: using Float as a String', nil},
-            {lib.VAR_PARTIAL, {v_partial=NULL}, 'E729: using Funcref as a String', nil},
-            {lib.VAR_FUNC, {v_string=NULL}, 'E729: using Funcref as a String', nil},
-            {lib.VAR_LIST, {v_list=NULL}, 'E730: using List as a String', nil},
-            {lib.VAR_DICT, {v_dict=NULL}, 'E731: using Dictionary as a String', nil},
+            {lib.VAR_FLOAT, {v_float=42.53}, 'E806: Using a Float as a String', nil},
+            {lib.VAR_PARTIAL, {v_partial=NULL}, 'E729: Using a Funcref as a String', nil},
+            {lib.VAR_FUNC, {v_string=NULL}, 'E729: Using a Funcref as a String', nil},
+            {lib.VAR_LIST, {v_list=NULL}, 'E730: Using a List as a String', nil},
+            {lib.VAR_DICT, {v_dict=NULL}, 'E731: Using a Dictionary as a String', nil},
             {lib.VAR_SPECIAL, {v_special=lib.kSpecialVarNull}, nil, 'v:null'},
             {lib.VAR_BOOL, {v_bool=lib.kBoolVarTrue}, nil, 'v:true'},
             {lib.VAR_BOOL, {v_bool=lib.kBoolVarFalse}, nil, 'v:false'},
-            {lib.VAR_UNKNOWN, nil, 'E908: using an invalid value as a String', nil},
+            {lib.VAR_UNKNOWN, nil, 'E908: Using an invalid value as a String', nil},
           }) do
             -- Using to_cstr, cannot free with tv_clear
             local tv = ffi.gc(typvalt(v[1], v[2]), nil)
@@ -3072,15 +3072,15 @@ describe('typval.c', function()
           for _, v in ipairs({
             {lib.VAR_NUMBER, {v_number=42}, nil, '42'},
             {lib.VAR_STRING, {v_string=to_cstr('100500')}, nil, '100500'},
-            {lib.VAR_FLOAT, {v_float=42.53}, 'E806: using Float as a String', ''},
-            {lib.VAR_PARTIAL, {v_partial=NULL}, 'E729: using Funcref as a String', ''},
-            {lib.VAR_FUNC, {v_string=NULL}, 'E729: using Funcref as a String', ''},
-            {lib.VAR_LIST, {v_list=NULL}, 'E730: using List as a String', ''},
-            {lib.VAR_DICT, {v_dict=NULL}, 'E731: using Dictionary as a String', ''},
+            {lib.VAR_FLOAT, {v_float=42.53}, 'E806: Using a Float as a String', ''},
+            {lib.VAR_PARTIAL, {v_partial=NULL}, 'E729: Using a Funcref as a String', ''},
+            {lib.VAR_FUNC, {v_string=NULL}, 'E729: Using a Funcref as a String', ''},
+            {lib.VAR_LIST, {v_list=NULL}, 'E730: Using a List as a String', ''},
+            {lib.VAR_DICT, {v_dict=NULL}, 'E731: Using a Dictionary as a String', ''},
             {lib.VAR_SPECIAL, {v_special=lib.kSpecialVarNull}, nil, 'v:null'},
             {lib.VAR_BOOL, {v_bool=lib.kBoolVarTrue}, nil, 'v:true'},
             {lib.VAR_BOOL, {v_bool=lib.kBoolVarFalse}, nil, 'v:false'},
-            {lib.VAR_UNKNOWN, nil, 'E908: using an invalid value as a String', ''},
+            {lib.VAR_UNKNOWN, nil, 'E908: Using an invalid value as a String', ''},
           }) do
             -- Using to_cstr, cannot free with tv_clear
             local tv = ffi.gc(typvalt(v[1], v[2]), nil)
@@ -3115,15 +3115,15 @@ describe('typval.c', function()
           for _, v in ipairs({
             {lib.VAR_NUMBER, {v_number=42}, nil, '42'},
             {lib.VAR_STRING, {v_string=to_cstr('100500')}, nil, '100500'},
-            {lib.VAR_FLOAT, {v_float=42.53}, 'E806: using Float as a String', nil},
-            {lib.VAR_PARTIAL, {v_partial=NULL}, 'E729: using Funcref as a String', nil},
-            {lib.VAR_FUNC, {v_string=NULL}, 'E729: using Funcref as a String', nil},
-            {lib.VAR_LIST, {v_list=NULL}, 'E730: using List as a String', nil},
-            {lib.VAR_DICT, {v_dict=NULL}, 'E731: using Dictionary as a String', nil},
+            {lib.VAR_FLOAT, {v_float=42.53}, 'E806: Using a Float as a String', nil},
+            {lib.VAR_PARTIAL, {v_partial=NULL}, 'E729: Using a Funcref as a String', nil},
+            {lib.VAR_FUNC, {v_string=NULL}, 'E729: Using a Funcref as a String', nil},
+            {lib.VAR_LIST, {v_list=NULL}, 'E730: Using a List as a String', nil},
+            {lib.VAR_DICT, {v_dict=NULL}, 'E731: Using a Dictionary as a String', nil},
             {lib.VAR_SPECIAL, {v_special=lib.kSpecialVarNull}, nil, 'v:null'},
             {lib.VAR_BOOL, {v_bool=lib.kBoolVarTrue}, nil, 'v:true'},
             {lib.VAR_BOOL, {v_bool=lib.kBoolVarFalse}, nil, 'v:false'},
-            {lib.VAR_UNKNOWN, nil, 'E908: using an invalid value as a String', nil},
+            {lib.VAR_UNKNOWN, nil, 'E908: Using an invalid value as a String', nil},
           }) do
             -- Using to_cstr, cannot free with tv_clear
             local tv = ffi.gc(typvalt(v[1], v[2]), nil)

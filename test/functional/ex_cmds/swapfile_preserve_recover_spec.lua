@@ -1,6 +1,5 @@
 local Screen = require('test.functional.ui.screen')
 local helpers = require('test.functional.helpers')(after_each)
-local lfs = require('lfs')
 local luv = require('luv')
 local eq, eval, expect, exec =
   helpers.eq, helpers.eval, helpers.expect, helpers.exec
@@ -13,6 +12,7 @@ local nvim_prog = helpers.nvim_prog
 local ok = helpers.ok
 local rmdir = helpers.rmdir
 local new_argv = helpers.new_argv
+local new_pipename = helpers.new_pipename
 local pesc = helpers.pesc
 local os_kill = helpers.os_kill
 local set_session = helpers.set_session
@@ -20,6 +20,7 @@ local spawn = helpers.spawn
 local nvim_async = helpers.nvim_async
 local expect_msg_seq = helpers.expect_msg_seq
 local pcall_err = helpers.pcall_err
+local mkdir = helpers.mkdir
 
 describe(':recover', function()
   before_each(clear)
@@ -37,37 +38,38 @@ describe(':recover', function()
 
 end)
 
-describe(':preserve', function()
-  local swapdir = lfs.currentdir()..'/Xtest_recover_dir'
+describe("preserve and (R)ecover with custom 'directory'", function()
+  local swapdir = luv.cwd()..'/Xtest_recover_dir'
+  local testfile = 'Xtest_recover_file1'
+  -- Put swapdir at the start of the 'directory' list. #1836
+  -- Note: `set swapfile` *must* go after `set directory`: otherwise it may
+  -- attempt to create a swapfile in different directory.
+  local init = [[
+    set directory^=]]..swapdir:gsub([[\]], [[\\]])..[[//
+    set swapfile fileformat=unix undolevels=-1
+  ]]
+
+  local nvim1
   before_each(function()
-    clear()
+    nvim1 = spawn(new_argv())
+    set_session(nvim1)
     rmdir(swapdir)
-    lfs.mkdir(swapdir)
+    mkdir(swapdir)
   end)
   after_each(function()
     command('%bwipeout!')
     rmdir(swapdir)
   end)
 
-  it("saves to custom 'directory' and (R)ecovers #1836", function()
-    local testfile = 'Xtest_recover_file1'
-    -- Put swapdir at the start of the 'directory' list. #1836
-    -- Note: `set swapfile` *must* go after `set directory`: otherwise it may
-    -- attempt to create a swapfile in different directory.
-    local init = [[
-      set directory^=]]..swapdir:gsub([[\]], [[\\]])..[[//
-      set swapfile fileformat=unix undolevels=-1
-    ]]
-
+  local function setup_swapname()
     exec(init)
     command('edit! '..testfile)
     feed('isometext<esc>')
-    command('preserve')
     exec('redir => g:swapname | silent swapname | redir END')
+    return eval('g:swapname')
+  end
 
-    local swappath1 = eval('g:swapname')
-
-    os_kill(eval('getpid()'))
+  local function test_recover(swappath1)
     -- Start another Nvim instance.
     local nvim2 = spawn({nvim_prog, '-u', 'NONE', '-i', 'NONE', '--embed'},
                                 true)
@@ -90,12 +92,41 @@ describe(':preserve', function()
     -- Verify that :swapname was not truncated (:help 'shortmess').
     ok(nil == string.find(swappath1, '%.%.%.'))
     ok(nil == string.find(swappath2, '%.%.%.'))
+  end
+
+  it('with :preserve and SIGKILL', function()
+    local swappath1 = setup_swapname()
+    command('preserve')
+    os_kill(eval('getpid()'))
+    test_recover(swappath1)
+  end)
+
+  it('closing stdio channel without :preserve #22096', function()
+    local swappath1 = setup_swapname()
+    nvim1:close()
+    test_recover(swappath1)
+  end)
+
+  it('killing TUI process without :preserve #22096', function()
+    helpers.skip(helpers.is_os('win'))
+    local screen = Screen.new()
+    screen:attach()
+    local child_server = new_pipename()
+    funcs.termopen({nvim_prog, '-u', 'NONE', '-i', 'NONE', '--listen', child_server})
+    screen:expect({any = pesc('[No Name]')})  -- Wait for the child process to start.
+    local child_session = helpers.connect(child_server)
+    set_session(child_session)
+    local swappath1 = setup_swapname()
+    set_session(nvim1)
+    command('call chanclose(&channel)')  -- Kill the child process.
+    screen:expect({any = pesc('[Process exited 1]')})  -- Wait for the child process to stop.
+    test_recover(swappath1)
   end)
 
 end)
 
 describe('swapfile detection', function()
-  local swapdir = lfs.currentdir()..'/Xtest_swapdialog_dir'
+  local swapdir = luv.cwd()..'/Xtest_swapdialog_dir'
   local nvim0
   -- Put swapdir at the start of the 'directory' list. #1836
   -- Note: `set swapfile` *must* go after `set directory`: otherwise it may
@@ -108,7 +139,7 @@ describe('swapfile detection', function()
     nvim0 = spawn(new_argv())
     set_session(nvim0)
     rmdir(swapdir)
-    lfs.mkdir(swapdir)
+    mkdir(swapdir)
   end)
   after_each(function()
     set_session(nvim0)
@@ -330,7 +361,8 @@ describe('swapfile detection', function()
     ]])
 
     -- pretend that the swapfile was created before boot
-    lfs.touch(swname, os.time() - luv.uptime() - 10)
+    local atime = os.time() - luv.uptime() - 10
+    luv.fs_utime(swname, atime, atime)
 
     feed(':edit Xswaptest<CR>')
     screen:expect({any = table.concat({

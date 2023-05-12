@@ -42,7 +42,7 @@
 # include "match.c.generated.h"
 #endif
 
-static char *e_invalwindow = N_("E957: Invalid window number");
+static const char *e_invalwindow = N_("E957: Invalid window number");
 
 #define SEARCH_HL_PRIORITY 0
 
@@ -98,7 +98,7 @@ static int match_add(win_T *wp, const char *const grp, const char *const pat, in
   if ((hlg_id = syn_check_group(grp, strlen(grp))) == 0) {
     return -1;
   }
-  if (pat != NULL && (regprog = vim_regcomp((char *)pat, RE_MAGIC)) == NULL) {
+  if (pat != NULL && (regprog = vim_regcomp(pat, RE_MAGIC)) == NULL) {
     semsg(_(e_invarg2), pat);
     return -1;
   }
@@ -111,7 +111,7 @@ static int match_add(win_T *wp, const char *const grp, const char *const pat, in
   }
   m->mit_id = id;
   m->mit_priority = prio;
-  m->mit_pattern = pat == NULL ? NULL: xstrdup(pat);
+  m->mit_pattern = pat == NULL ? NULL : xstrdup(pat);
   m->mit_hlg_id = hlg_id;
   m->mit_match.regprog = regprog;
   m->mit_match.rmm_ic = false;
@@ -388,7 +388,7 @@ static int next_search_hl_pos(match_T *shl, linenr_T lnum, matchitem_T *match, c
   match->mit_pos_cur = 0;
   if (found >= 0) {
     colnr_T start = match->mit_pos_array[found].col == 0
-                    ? 0: match->mit_pos_array[found].col - 1;
+                    ? 0 : match->mit_pos_array[found].col - 1;
     colnr_T end = match->mit_pos_array[found].col == 0
                   ? MAXCOL : start + match->mit_pos_array[found].len;
 
@@ -419,7 +419,6 @@ static void next_search_hl(win_T *win, match_T *search_hl, match_T *shl, linenr_
                            colnr_T mincol, matchitem_T *cur)
   FUNC_ATTR_NONNULL_ARG(2)
 {
-  linenr_T l;
   colnr_T matchcol;
   long nmatched = 0;
   const int called_emsg_before = called_emsg;
@@ -435,7 +434,7 @@ static void next_search_hl(win_T *win, match_T *search_hl, match_T *shl, linenr_
     // 1. If the "lnum" is below a previous match, start a new search.
     // 2. If the previous match includes "mincol", use it.
     // 3. Continue after the previous match.
-    l = shl->lnum + shl->rm.endpos[0].lnum - shl->rm.startpos[0].lnum;
+    linenr_T l = shl->lnum + shl->rm.endpos[0].lnum - shl->rm.startpos[0].lnum;
     if (lnum > l) {
       shl->lnum = 0;
     } else if (lnum < l || shl->rm.endpos[0].col > mincol) {
@@ -445,7 +444,7 @@ static void next_search_hl(win_T *win, match_T *search_hl, match_T *shl, linenr_
 
   // Repeat searching for a match until one is found that includes "mincol"
   // or none is found in this line.
-  for (;;) {
+  while (true) {
     // Stop searching after passing the time limit.
     if (profile_passed_limit(shl->tm)) {
       shl->lnum = 0;                    // no match found in time
@@ -939,10 +938,9 @@ void f_getmatches(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
         tv_dict_add_list(dict, buf, (size_t)len, l);
       }
     } else {
-      tv_dict_add_str(dict, S_LEN("pattern"), (const char *)cur->mit_pattern);
+      tv_dict_add_str(dict, S_LEN("pattern"), cur->mit_pattern);
     }
-    tv_dict_add_str(dict, S_LEN("group"),
-                    (const char *)syn_id2name(cur->mit_hlg_id));
+    tv_dict_add_str(dict, S_LEN("group"), syn_id2name(cur->mit_hlg_id));
     tv_dict_add_nr(dict, S_LEN("priority"), (varnumber_T)cur->mit_priority);
     tv_dict_add_nr(dict, S_LEN("id"), (varnumber_T)cur->mit_id);
 
@@ -1167,9 +1165,8 @@ void f_matcharg(typval_T *argvars, typval_T *rettv, EvalFuncData fptr)
     matchitem_T *const m = get_match(curwin, id);
 
     if (m != NULL) {
-      tv_list_append_string(rettv->vval.v_list,
-                            (const char *)syn_id2name(m->mit_hlg_id), -1);
-      tv_list_append_string(rettv->vval.v_list, (const char *)m->mit_pattern, -1);
+      tv_list_append_string(rettv->vval.v_list, syn_id2name(m->mit_hlg_id), -1);
+      tv_list_append_string(rettv->vval.v_list, m->mit_pattern, -1);
     } else {
       tv_list_append_string(rettv->vval.v_list, NULL, 0);
       tv_list_append_string(rettv->vval.v_list, NULL, 0);
@@ -1233,7 +1230,7 @@ void ex_match(exarg_T *eap)
     if (!eap->skip) {
       if (*end != NUL && !ends_excmd(*skipwhite(end + 1))) {
         xfree(g);
-        eap->errmsg = ex_errmsg(e_trailing_arg, (const char *)end);
+        eap->errmsg = ex_errmsg(e_trailing_arg, end);
         return;
       }
       if (*end != *p) {
@@ -1244,8 +1241,7 @@ void ex_match(exarg_T *eap)
 
       c = (uint8_t)(*end);
       *end = NUL;
-      match_add(curwin, (const char *)g, (const char *)p + 1, 10, id,
-                NULL, NULL);
+      match_add(curwin, g, p + 1, 10, id, NULL, NULL);
       xfree(g);
       *end = (char)c;
     }

@@ -11,7 +11,9 @@
 #include "klib/kvec.h"
 #include "lauxlib.h"
 #include "nvim/api/private/defs.h"
+#include "nvim/api/private/dispatch.h"
 #include "nvim/api/private/helpers.h"
+#include "nvim/api/private/validate.h"
 #include "nvim/api/ui.h"
 #include "nvim/decoration_provider.h"
 #include "nvim/drawscreen.h"
@@ -205,7 +207,7 @@ int ns_get_hl(NS *ns_hl, int hl_id, bool link, bool nodefault)
   if (!valid_item && p->hl_def != LUA_NOREF && !recursive) {
     MAXSIZE_TEMP_ARRAY(args, 3);
     ADD_C(args, INTEGER_OBJ((Integer)ns_id));
-    ADD_C(args, STRING_OBJ(cstr_to_string((char *)syn_id2name(hl_id))));
+    ADD_C(args, STRING_OBJ(cstr_to_string(syn_id2name(hl_id))));
     ADD_C(args, BOOLEAN_OBJ(link));
     // TODO(bfredl): preload the "global" attr dict?
 
@@ -302,7 +304,7 @@ int hl_get_ui_attr(int ns_id, int idx, int final_id, bool optional)
   bool available = false;
 
   if (final_id > 0) {
-    int syn_attr = syn_ns_id2attr(ns_id, final_id, optional);
+    int syn_attr = syn_ns_id2attr(ns_id, final_id, &optional);
     if (syn_attr > 0) {
       attrs = syn_attr2entry(syn_attr);
       available = true;
@@ -395,6 +397,15 @@ void update_window_hl(win_T *wp, bool invalid)
                                              wp->w_hl_attr_normal);
   } else {
     wp->w_hl_attr_normalnc = hl_def[HLF_INACTIVE];
+  }
+
+  // if blend= attribute is not set, 'winblend' value overrides it.
+  if (wp->w_floating && wp->w_p_winbl > 0) {
+    HlEntry entry = kv_A(attr_entries, wp->w_hl_attr_normalnc);
+    if (entry.attr.hl_blend == -1) {
+      entry.attr.hl_blend = (int)wp->w_p_winbl;
+      wp->w_hl_attr_normalnc = get_attr_entry(entry);
+    }
   }
 }
 
@@ -506,6 +517,16 @@ void hl_invalidate_blends(void)
   update_window_hl(curwin, true);
 }
 
+/// Combine HlAttrFlags.
+/// The underline attribute in "prim_ae" overrules the one in "char_ae" if both are present.
+static int16_t hl_combine_ae(int16_t char_ae, int16_t prim_ae)
+{
+  int16_t char_ul = char_ae & HL_UNDERLINE_MASK;
+  int16_t prim_ul = prim_ae & HL_UNDERLINE_MASK;
+  int16_t new_ul = prim_ul ? prim_ul : char_ul;
+  return (char_ae & ~HL_UNDERLINE_MASK) | (prim_ae & ~HL_UNDERLINE_MASK) | new_ul;
+}
+
 // Combine special attributes (e.g., for spelling) with other attributes
 // (e.g., for syntax highlighting).
 // "prim_attr" overrules "char_attr".
@@ -536,12 +557,12 @@ int hl_combine_attr(int char_attr, int prim_attr)
   if (prim_aep.cterm_ae_attr & HL_NOCOMBINE) {
     new_en.cterm_ae_attr = prim_aep.cterm_ae_attr;
   } else {
-    new_en.cterm_ae_attr |= prim_aep.cterm_ae_attr;
+    new_en.cterm_ae_attr = hl_combine_ae(new_en.cterm_ae_attr, prim_aep.cterm_ae_attr);
   }
   if (prim_aep.rgb_ae_attr & HL_NOCOMBINE) {
     new_en.rgb_ae_attr = prim_aep.rgb_ae_attr;
   } else {
-    new_en.rgb_ae_attr |= prim_aep.rgb_ae_attr;
+    new_en.rgb_ae_attr = hl_combine_ae(new_en.rgb_ae_attr, prim_aep.rgb_ae_attr);
   }
 
   if (prim_aep.cterm_fg_color > 0) {
@@ -663,7 +684,7 @@ int hl_blend_attrs(int back_attr, int front_attr, bool *through)
   } else {
     cattrs = fattrs;
     if (ratio >= 50) {
-      cattrs.rgb_ae_attr |= battrs.rgb_ae_attr;
+      cattrs.rgb_ae_attr = hl_combine_ae(battrs.rgb_ae_attr, cattrs.rgb_ae_attr);
     }
     cattrs.rgb_fg_color = rgb_blend(ratio/2, battrs.rgb_fg_color,
                                     fattrs.rgb_fg_color);
@@ -810,7 +831,7 @@ Dictionary hl_get_attr_by_id(Integer attr_id, Boolean rgb, Arena *arena, Error *
     return dic;
   }
   Dictionary retval = arena_dict(arena, HLATTRS_DICT_SIZE);
-  hlattrs2dict(&retval, syn_attr2entry((int)attr_id), rgb);
+  hlattrs2dict(&retval, NULL, syn_attr2entry((int)attr_id), rgb, false);
   return retval;
 }
 
@@ -819,97 +840,100 @@ Dictionary hl_get_attr_by_id(Integer attr_id, Boolean rgb, Arena *arena, Error *
 /// @param[in/out] hl Dictionary with pre-allocated space for HLATTRS_DICT_SIZE elements
 /// @param[in] aep data to convert
 /// @param use_rgb use 'gui*' settings if true, else resorts to 'cterm*'
-void hlattrs2dict(Dictionary *dict, HlAttrs ae, bool use_rgb)
+/// @param short_keys change (foreground, background, special) to (fg, bg, sp) for 'gui*' settings
+///                          (foreground, background) to (ctermfg, ctermbg) for 'cterm*' settings
+void hlattrs2dict(Dictionary *hl, Dictionary *hl_attrs, HlAttrs ae, bool use_rgb, bool short_keys)
 {
-  assert(dict->capacity >= HLATTRS_DICT_SIZE);  // at most 16 items
-  Dictionary hl = *dict;
+  hl_attrs = hl_attrs ? hl_attrs : hl;
+  assert(hl->capacity >= HLATTRS_DICT_SIZE);  // at most 16 items
+  assert(hl_attrs->capacity >= HLATTRS_DICT_SIZE);  // at most 16 items
   int mask  = use_rgb ? ae.rgb_ae_attr : ae.cterm_ae_attr;
 
   if (mask & HL_INVERSE) {
-    PUT_C(hl, "reverse", BOOLEAN_OBJ(true));
+    PUT_C(*hl_attrs, "reverse", BOOLEAN_OBJ(true));
   }
 
   if (mask & HL_BOLD) {
-    PUT_C(hl, "bold", BOOLEAN_OBJ(true));
+    PUT_C(*hl_attrs, "bold", BOOLEAN_OBJ(true));
   }
 
   if (mask & HL_ITALIC) {
-    PUT_C(hl, "italic", BOOLEAN_OBJ(true));
+    PUT_C(*hl_attrs, "italic", BOOLEAN_OBJ(true));
   }
 
   switch (mask & HL_UNDERLINE_MASK) {
   case HL_UNDERLINE:
-    PUT_C(hl, "underline", BOOLEAN_OBJ(true));
+    PUT_C(*hl_attrs, "underline", BOOLEAN_OBJ(true));
     break;
 
   case HL_UNDERCURL:
-    PUT_C(hl, "undercurl", BOOLEAN_OBJ(true));
+    PUT_C(*hl_attrs, "undercurl", BOOLEAN_OBJ(true));
     break;
 
   case HL_UNDERDOUBLE:
-    PUT_C(hl, "underdouble", BOOLEAN_OBJ(true));
+    PUT_C(*hl_attrs, "underdouble", BOOLEAN_OBJ(true));
     break;
 
   case HL_UNDERDOTTED:
-    PUT_C(hl, "underdotted", BOOLEAN_OBJ(true));
+    PUT_C(*hl_attrs, "underdotted", BOOLEAN_OBJ(true));
     break;
 
   case HL_UNDERDASHED:
-    PUT_C(hl, "underdashed", BOOLEAN_OBJ(true));
+    PUT_C(*hl_attrs, "underdashed", BOOLEAN_OBJ(true));
     break;
   }
 
   if (mask & HL_STANDOUT) {
-    PUT_C(hl, "standout", BOOLEAN_OBJ(true));
+    PUT_C(*hl_attrs, "standout", BOOLEAN_OBJ(true));
   }
 
   if (mask & HL_STRIKETHROUGH) {
-    PUT_C(hl, "strikethrough", BOOLEAN_OBJ(true));
+    PUT_C(*hl_attrs, "strikethrough", BOOLEAN_OBJ(true));
   }
 
   if (mask & HL_ALTFONT) {
-    PUT_C(hl, "altfont", BOOLEAN_OBJ(true));
+    PUT_C(*hl_attrs, "altfont", BOOLEAN_OBJ(true));
   }
 
   if (mask & HL_NOCOMBINE) {
-    PUT_C(hl, "nocombine", BOOLEAN_OBJ(true));
+    PUT_C(*hl_attrs, "nocombine", BOOLEAN_OBJ(true));
   }
 
   if (use_rgb) {
-    if (mask & HL_FG_INDEXED) {
-      PUT_C(hl, "fg_indexed", BOOLEAN_OBJ(true));
-    }
-
-    if (mask & HL_BG_INDEXED) {
-      PUT_C(hl, "bg_indexed", BOOLEAN_OBJ(true));
-    }
-
     if (ae.rgb_fg_color != -1) {
-      PUT_C(hl, "foreground", INTEGER_OBJ(ae.rgb_fg_color));
+      PUT_C(*hl, short_keys ? "fg" : "foreground", INTEGER_OBJ(ae.rgb_fg_color));
     }
 
     if (ae.rgb_bg_color != -1) {
-      PUT_C(hl, "background", INTEGER_OBJ(ae.rgb_bg_color));
+      PUT_C(*hl, short_keys ? "bg" : "background", INTEGER_OBJ(ae.rgb_bg_color));
     }
 
     if (ae.rgb_sp_color != -1) {
-      PUT_C(hl, "special", INTEGER_OBJ(ae.rgb_sp_color));
+      PUT_C(*hl, short_keys ? "sp" : "special", INTEGER_OBJ(ae.rgb_sp_color));
+    }
+
+    if (!short_keys) {
+      if (mask & HL_FG_INDEXED) {
+        PUT_C(*hl, "fg_indexed", BOOLEAN_OBJ(true));
+      }
+
+      if (mask & HL_BG_INDEXED) {
+        PUT_C(*hl, "bg_indexed", BOOLEAN_OBJ(true));
+      }
     }
   } else {
     if (ae.cterm_fg_color != 0) {
-      PUT_C(hl, "foreground", INTEGER_OBJ(ae.cterm_fg_color - 1));
+      PUT_C(*hl, short_keys ? "ctermfg" : "foreground", INTEGER_OBJ(ae.cterm_fg_color - 1));
     }
 
     if (ae.cterm_bg_color != 0) {
-      PUT_C(hl, "background", INTEGER_OBJ(ae.cterm_bg_color - 1));
+      PUT_C(*hl, short_keys ? "ctermbg" : "background", INTEGER_OBJ(ae.cterm_bg_color - 1));
     }
   }
 
-  if (ae.hl_blend > -1) {
-    PUT_C(hl, "blend", INTEGER_OBJ(ae.hl_blend));
+  if (ae.hl_blend > -1 && (use_rgb || !short_keys)) {
+    PUT_C(*hl, "blend", INTEGER_OBJ(ae.hl_blend));
   }
-
-  *dict = hl;
 }
 
 HlAttrs dict2hlattrs(Dict(highlight) *dict, bool use_rgb, int *link_id, Error *err)
@@ -923,7 +947,10 @@ HlAttrs dict2hlattrs(Dict(highlight) *dict, bool use_rgb, int *link_id, Error *e
 
 #define CHECK_FLAG(d, m, name, extra, flag) \
   if (api_object_to_bool(d->name##extra, #name, false, err)) { \
-    m = m | flag; \
+    if (flag & HL_UNDERLINE_MASK) { \
+      m &= ~HL_UNDERLINE_MASK; \
+    } \
+    m |= flag; \
   }
 
   CHECK_FLAG(dict, mask, reverse, , HL_INVERSE);
@@ -971,35 +998,33 @@ HlAttrs dict2hlattrs(Dict(highlight) *dict, bool use_rgb, int *link_id, Error *e
     return hlattrs;
   }
 
-  if (dict->blend.type == kObjectTypeInteger) {
+  if (HAS_KEY(dict->blend)) {
+    VALIDATE_T("blend", kObjectTypeInteger, dict->blend.type, {
+      return hlattrs;
+    });
+
     Integer blend0 = dict->blend.data.integer;
-    if (blend0 < 0 || blend0 > 100) {
-      api_set_error(err, kErrorTypeValidation, "'blend' is not between 0 to 100");
-    } else {
-      blend = (int)blend0;
-    }
-  } else if (HAS_KEY(dict->blend)) {
-    api_set_error(err, kErrorTypeValidation, "'blend' must be an integer");
-  }
-  if (ERROR_SET(err)) {
-    return hlattrs;
+    VALIDATE_RANGE((blend0 >= 0 && blend0 <= 100), "blend", {
+      return hlattrs;
+    });
+    blend = (int)blend0;
   }
 
   if (HAS_KEY(dict->link) || HAS_KEY(dict->global_link)) {
-    if (link_id) {
-      if (HAS_KEY(dict->global_link)) {
-        *link_id = object_to_hl_id(dict->global_link, "link", err);
-        mask |= HL_GLOBAL;
-      } else {
-        *link_id = object_to_hl_id(dict->link, "link", err);
-      }
-
-      if (ERROR_SET(err)) {
-        return hlattrs;
-      }
-    } else {
+    if (!link_id) {
       api_set_error(err, kErrorTypeValidation, "Invalid Key: '%s'",
                     HAS_KEY(dict->global_link) ? "global_link" : "link");
+      return hlattrs;
+    }
+    if (HAS_KEY(dict->global_link)) {
+      *link_id = object_to_hl_id(dict->global_link, "link", err);
+      mask |= HL_GLOBAL;
+    } else {
+      *link_id = object_to_hl_id(dict->link, "link", err);
+    }
+
+    if (ERROR_SET(err)) {
+      return hlattrs;
     }
   }
 
@@ -1026,7 +1051,9 @@ HlAttrs dict2hlattrs(Dict(highlight) *dict, bool use_rgb, int *link_id, Error *e
     // TODO(clason): handle via gen_api_dispatch
     cterm_mask_provided = true;
   } else if (HAS_KEY(dict->cterm)) {
-    api_set_error(err, kErrorTypeValidation, "'cterm' must be a Dictionary.");
+    VALIDATE_EXP(false, "cterm", "Dict", api_typename(dict->cterm.type), {
+      return hlattrs;
+    });
   }
 #undef CHECK_FLAG
 
@@ -1083,13 +1110,14 @@ int object_to_color(Object val, char *key, bool rgb, Error *err)
     } else {
       color = name_to_ctermcolor(str.data);
     }
-    if (color < 0) {
-      api_set_error(err, kErrorTypeValidation, "'%s' is not a valid color", str.data);
-    }
+    VALIDATE_S((color >= 0), "highlight color", str.data, {
+      return color;
+    });
     return color;
   } else {
-    api_set_error(err, kErrorTypeValidation, "'%s' must be string or integer", key);
-    return 0;
+    VALIDATE_EXP(false, key, "String or Integer", NULL, {
+      return 0;
+    });
   }
 }
 
@@ -1115,7 +1143,7 @@ static void hl_inspect_impl(Array *arr, int attr)
   case kHlSyntax:
     PUT(item, "kind", STRING_OBJ(cstr_to_string("syntax")));
     PUT(item, "hi_name",
-        STRING_OBJ(cstr_to_string((char *)syn_id2name(e.id1))));
+        STRING_OBJ(cstr_to_string(syn_id2name(e.id1))));
     break;
 
   case kHlUI:
@@ -1123,7 +1151,7 @@ static void hl_inspect_impl(Array *arr, int attr)
     const char *ui_name = (e.id1 == -1) ? "Normal" : hlf_names[e.id1];
     PUT(item, "ui_name", STRING_OBJ(cstr_to_string(ui_name)));
     PUT(item, "hi_name",
-        STRING_OBJ(cstr_to_string((char *)syn_id2name(e.id2))));
+        STRING_OBJ(cstr_to_string(syn_id2name(e.id2))));
     break;
 
   case kHlTerminal:

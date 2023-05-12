@@ -32,12 +32,14 @@
 #include "nvim/msgpack_rpc/server.h"
 #include "nvim/os/os_defs.h"
 #include "nvim/os/shell.h"
+#include "nvim/path.h"
 #include "nvim/rbuffer.h"
+
 #ifdef MSWIN
+# include "nvim/os/fs.h"
 # include "nvim/os/os_win_console.h"
 # include "nvim/os/pty_conpty_win.h"
 #endif
-#include "nvim/path.h"
 
 static bool did_stdio = false;
 
@@ -79,7 +81,7 @@ bool channel_close(uint64_t id, ChannelPart part, const char **error)
       // allow double close, even though we can't say what parts was valid.
       return true;
     }
-    *error = (const char *)e_invchan;
+    *error = e_invchan;
     return false;
   }
 
@@ -89,19 +91,19 @@ bool channel_close(uint64_t id, ChannelPart part, const char **error)
     if (chan->is_rpc) {
       rpc_close(chan);
     } else if (part == kChannelPartRpc) {
-      *error = (const char *)e_invstream;
+      *error = e_invstream;
       return false;
     }
   } else if ((part == kChannelPartStdin || part == kChannelPartStdout)
              && chan->is_rpc) {
-    *error = (const char *)e_invstreamrpc;
+    *error = e_invstreamrpc;
     return false;
   }
 
   switch (chan->streamtype) {
   case kChannelStreamSocket:
     if (!close_main) {
-      *error = (const char *)e_invstream;
+      *error = e_invstream;
       return false;
     }
     stream_may_close(&chan->stream.socket);
@@ -132,14 +134,14 @@ bool channel_close(uint64_t id, ChannelPart part, const char **error)
       stream_may_close(&chan->stream.stdio.out);
     }
     if (part == kChannelPartStderr) {
-      *error = (const char *)e_invstream;
+      *error = e_invstream;
       return false;
     }
     break;
 
   case kChannelStreamStderr:
     if (part != kChannelPartAll && part != kChannelPartStderr) {
-      *error = (const char *)e_invstream;
+      *error = e_invstream;
       return false;
     }
     if (!chan->stream.err.closed) {
@@ -154,7 +156,7 @@ bool channel_close(uint64_t id, ChannelPart part, const char **error)
 
   case kChannelStreamInternal:
     if (!close_main) {
-      *error = (const char *)e_invstream;
+      *error = e_invstream;
       return false;
     }
     if (chan->term) {
@@ -207,7 +209,7 @@ Channel *channel_alloc(ChannelStreamType type)
 
 void channel_create_event(Channel *chan, const char *ext_source)
 {
-#if MIN_LOG_LEVEL <= LOGLVL_INF
+#ifdef NVIM_LOG_DEBUG
   const char *source;
 
   if (ext_source) {
@@ -216,7 +218,7 @@ void channel_create_event(Channel *chan, const char *ext_source)
     source = ext_source;
   } else {
     eval_fmt_source_name_line(IObuff, sizeof(IObuff));
-    source = (const char *)IObuff;
+    source = IObuff;
   }
 
   assert(chan->id <= VARNUMBER_MAX);
@@ -370,7 +372,7 @@ Channel *channel_job_start(char **argv, CallbackReader on_stdout, CallbackReader
   proc->overlapped = overlapped;
 
   char *cmd = xstrdup(proc->argv[0]);
-  bool has_in, has_out, has_err;
+  bool has_out, has_err;
   if (proc->type == kProcessTypePty) {
     has_out = true;
     has_err = false;
@@ -380,14 +382,7 @@ Channel *channel_job_start(char **argv, CallbackReader on_stdout, CallbackReader
     proc->fwd_err = chan->on_stderr.fwd_err;
   }
 
-  switch (stdin_mode) {
-  case kChannelStdinPipe:
-    has_in = true;
-    break;
-  case kChannelStdinNull:
-    has_in = false;
-    break;
-  }
+  bool has_in = stdin_mode == kChannelStdinPipe;
 
   int status = process_spawn(proc, has_in, has_out, has_err);
   if (status) {
@@ -836,13 +831,12 @@ static void term_close(void *data)
   multiqueue_put(chan->events, term_delayed_free, 1, data);
 }
 
-void channel_info_changed(Channel *chan, bool new)
+void channel_info_changed(Channel *chan, bool new_chan)
 {
-  event_T event = new ? EVENT_CHANOPEN : EVENT_CHANINFO;
+  event_T event = new_chan ? EVENT_CHANOPEN : EVENT_CHANINFO;
   if (has_event(event)) {
     channel_incref(chan);
-    multiqueue_put(main_loop.events, set_info_event,
-                   2, chan, event);
+    multiqueue_put(main_loop.events, set_info_event, 2, chan, event);
   }
 }
 

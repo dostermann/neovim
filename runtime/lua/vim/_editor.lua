@@ -28,6 +28,7 @@
 for k, v in pairs({
   treesitter = true,
   filetype = true,
+  loader = true,
   F = true,
   lsp = true,
   highlight = true,
@@ -35,11 +36,23 @@ for k, v in pairs({
   keymap = true,
   ui = true,
   health = true,
-  fs = true,
   secure = true,
+  _watch = true,
 }) do
   vim._submodules[k] = v
 end
+
+-- There are things which have special rules in vim._init_packages
+-- for legacy reasons (uri) or for performance (_inspector).
+-- most new things should go into a submodule namespace ( vim.foobar.do_thing() )
+vim._extra = {
+  uri_from_fname = true,
+  uri_from_bufnr = true,
+  uri_to_fname = true,
+  uri_to_bufnr = true,
+  show_pos = true,
+  inspect_pos = true,
+}
 
 vim.log = {
   levels = {
@@ -309,8 +322,8 @@ end
 ---
 ---@param command string|table Command(s) to execute.
 ---                            If a string, executes multiple lines of Vim script at once. In this
----                            case, it is an alias to |nvim_exec()|, where `output` is set to
----                            false. Thus it works identical to |:source|.
+---                            case, it is an alias to |nvim_exec2()|, where `opts.output` is set
+---                            to false. Thus it works identical to |:source|.
 ---                            If a table, executes a single command. In this case, it is an alias
 ---                            to |nvim_cmd()| where `opts` is empty.
 ---@see |ex-cmd-index|
@@ -325,7 +338,8 @@ vim.cmd = setmetatable({}, {
     if type(command) == 'table' then
       return vim.api.nvim_cmd(command, {})
     else
-      return vim.api.nvim_exec(command, false)
+      vim.api.nvim_exec2(command, {})
+      return ''
     end
   end,
   __index = function(t, command)
@@ -384,17 +398,38 @@ do
   vim.t = make_dict_accessor('t')
 end
 
---- Get a table of lines with start, end columns for a region marked by two points
+--- Get a table of lines with start, end columns for a region marked by two points.
+--- Input and output positions are (0,0)-indexed and indicate byte positions.
 ---
----@param bufnr number of buffer
----@param pos1 integer[] (line, column) tuple marking beginning of region
----@param pos2 integer[] (line, column) tuple marking end of region
+---@param bufnr integer number of buffer
+---@param pos1 integer[]|string start of region as a (line, column) tuple or string accepted by |getpos()|
+---@param pos2 integer[]|string end of region as a (line, column) tuple or string accepted by |getpos()|
 ---@param regtype string type of selection, see |setreg()|
----@param inclusive boolean indicating whether the selection is end-inclusive
----@return table region Table of the form `{linenr = {startcol,endcol}}`
+---@param inclusive boolean indicating whether column of pos2 is inclusive
+---@return table region Table of the form `{linenr = {startcol,endcol}}`.
+---        `endcol` is exclusive, and whole lines are marked with
+---        `{startcol,endcol} = {0,-1}`.
 function vim.region(bufnr, pos1, pos2, regtype, inclusive)
   if not vim.api.nvim_buf_is_loaded(bufnr) then
     vim.fn.bufload(bufnr)
+  end
+
+  if type(pos1) == 'string' then
+    local pos = vim.fn.getpos(pos1)
+    pos1 = { pos[2] - 1, pos[3] - 1 + pos[4] }
+  end
+  if type(pos2) == 'string' then
+    local pos = vim.fn.getpos(pos2)
+    pos2 = { pos[2] - 1, pos[3] - 1 + pos[4] }
+  end
+
+  if pos1[1] > pos2[1] or (pos1[1] == pos2[1] and pos1[2] > pos2[2]) then
+    pos1, pos2 = pos2, pos1
+  end
+
+  -- getpos() may return {0,0,0,0}
+  if pos1[1] < 0 or pos1[2] < 0 then
+    return {}
   end
 
   -- check that region falls within current buffer
@@ -471,7 +506,7 @@ end
 --- writes to |:messages|.
 ---
 ---@param msg string Content of the notification to show to the user.
----@param level number|nil One of the values from |vim.log.levels|.
+---@param level integer|nil One of the values from |vim.log.levels|.
 ---@param opts table|nil Optional parameters. Unused by default.
 function vim.notify(msg, level, opts) -- luacheck: no unused args
   if level == vim.log.levels.ERROR then
@@ -492,7 +527,7 @@ do
   --- display a notification.
   ---
   ---@param msg string Content of the notification to show to the user.
-  ---@param level number|nil One of the values from |vim.log.levels|.
+  ---@param level integer|nil One of the values from |vim.log.levels|.
   ---@param opts table|nil Optional parameters. Unused by default.
   ---@return boolean true if message was displayed, else false
   function vim.notify_once(msg, level, opts)
@@ -503,11 +538,6 @@ do
     end
     return false
   end
-end
-
----@private
-function vim.register_keystroke_callback()
-  error('vim.register_keystroke_callback is deprecated, instead use: vim.on_key')
 end
 
 local on_key_cbs = {}
@@ -521,10 +551,10 @@ local on_key_cbs = {}
 ---@param fn function: Callback function. It should take one string argument.
 ---                   On each key press, Nvim passes the key char to fn(). |i_CTRL-V|
 ---                   If {fn} is nil, it removes the callback for the associated {ns_id}
----@param ns_id number? Namespace ID. If nil or 0, generates and returns a new
+---@param ns_id integer? Namespace ID. If nil or 0, generates and returns a new
 ---                    |nvim_create_namespace()| id.
 ---
----@return number Namespace id associated with {fn}. Or count of all callbacks
+---@return integer Namespace id associated with {fn}. Or count of all callbacks
 ---if on_key() is called without arguments.
 ---
 ---@note {fn} will be removed if an error occurs while calling.
@@ -574,14 +604,12 @@ function vim._on_key(char)
 end
 
 --- Generate a list of possible completions for the string.
---- String starts with ^ and then has the pattern.
+--- String has the pattern.
 ---
 ---     1. Can we get it to just return things in the global namespace with that name prefix
 ---     2. Can we get it to return things from global namespace even with `print(` in front.
 function vim._expand_pat(pat, env)
   env = env or _G
-
-  pat = string.sub(pat, 2, #pat)
 
   if pat == '' then
     local result = vim.tbl_keys(env)
@@ -643,7 +671,7 @@ function vim._expand_pat(pat, env)
       local mt = getmetatable(final_env)
       if mt and type(mt.__index) == 'table' then
         field = rawget(mt.__index, key)
-      elseif final_env == vim and vim._submodules[key] then
+      elseif final_env == vim and (vim._submodules[key] or vim._extra[key]) then
         field = vim[key]
       end
     end
@@ -673,6 +701,7 @@ function vim._expand_pat(pat, env)
   end
   if final_env == vim then
     insert_keys(vim._submodules)
+    insert_keys(vim._extra)
   end
 
   keys = vim.tbl_keys(keys)
@@ -744,23 +773,74 @@ vim._expand_pat_get_parts = function(lua_string)
   return parts, search_index
 end
 
----Prints given arguments in human-readable format.
----Example:
----<pre>lua
----  -- Print highlight group Normal and store it's contents in a variable.
----  local hl_normal = vim.pretty_print(vim.api.nvim_get_hl_by_name("Normal", true))
----</pre>
----@see |vim.inspect()|
----@return any # given arguments.
+do
+  -- Ideally we should just call complete() inside omnifunc, though there are
+  -- some bugs, so fake the two-step dance for now.
+  local matches
+
+  --- Omnifunc for completing lua values from from the runtime lua interpreter,
+  --- similar to the builtin completion for the `:lua` command.
+  ---
+  --- Activate using `set omnifunc=v:lua.vim.lua_omnifunc` in a lua buffer.
+  function vim.lua_omnifunc(find_start, _)
+    if find_start == 1 then
+      local line = vim.api.nvim_get_current_line()
+      local prefix = string.sub(line, 1, vim.api.nvim_win_get_cursor(0)[2])
+      local pos
+      matches, pos = vim._expand_pat(prefix)
+      return (#matches > 0 and pos) or -1
+    else
+      return matches
+    end
+  end
+end
+
+---@private
 function vim.pretty_print(...)
-  local objects = {}
-  for i = 1, select('#', ...) do
-    local v = select(i, ...)
-    table.insert(objects, vim.inspect(v))
+  vim.deprecate('vim.pretty_print', 'vim.print', '0.10')
+  return vim.print(...)
+end
+
+--- "Pretty prints" the given arguments and returns them unmodified.
+---
+--- Example:
+--- <pre>lua
+---   local hl_normal = vim.print(vim.api.nvim_get_hl_by_name('Normal', true))
+--- </pre>
+---
+--- @see |vim.inspect()|
+--- @return any # given arguments.
+function vim.print(...)
+  if vim.in_fast_event() then
+    print(...)
+    return ...
   end
 
-  print(table.concat(objects, '    '))
+  for i = 1, select('#', ...) do
+    local o = select(i, ...)
+    if type(o) == 'string' then
+      vim.api.nvim_out_write(o)
+    else
+      vim.api.nvim_out_write(vim.inspect(o, { newline = '\n', indent = '  ' }))
+    end
+    vim.api.nvim_out_write('\n')
+  end
+
   return ...
+end
+
+--- Translate keycodes.
+---
+--- Example:
+--- <pre>lua
+---   local k = vim.keycode
+---   vim.g.mapleader = k'<bs>'
+--- </pre>
+--- @param str string String to be converted.
+--- @return string
+--- @see |nvim_replace_termcodes()|
+function vim.keycode(str)
+  return vim.api.nvim_replace_termcodes(str, true, true, true)
 end
 
 function vim._cs_remote(rcid, server_addr, connect_error, args)
@@ -833,26 +913,32 @@ function vim._cs_remote(rcid, server_addr, connect_error, args)
   }
 end
 
---- Display a deprecation notification to the user.
+--- Shows a deprecation message to the user.
 ---
----@param name        string     Deprecated function.
----@param alternative string|nil Preferred alternative function.
----@param version     string     Version in which the deprecated function will
----                              be removed.
----@param plugin      string|nil Plugin name that the function will be removed
----                              from. Defaults to "Nvim".
+---@param name        string     Deprecated feature (function, API, etc.).
+---@param alternative string|nil Suggested alternative feature.
+---@param version     string     Version when the deprecated function will be removed.
+---@param plugin      string|nil Name of the plugin that owns the deprecated feature.
+---                              Defaults to "Nvim".
 ---@param backtrace   boolean|nil Prints backtrace. Defaults to true.
+---
+---@returns Deprecated message, or nil if no message was shown.
 function vim.deprecate(name, alternative, version, plugin, backtrace)
-  local message = name .. ' is deprecated'
+  local msg = ('%s is deprecated'):format(name)
   plugin = plugin or 'Nvim'
-  message = alternative and (message .. ', use ' .. alternative .. ' instead.') or message
-  message = message
-    .. ' See :h deprecated\nThis function will be removed in '
-    .. plugin
-    .. ' version '
-    .. version
-  if vim.notify_once(message, vim.log.levels.WARN) and backtrace ~= false then
+  msg = alternative and ('%s, use %s instead.'):format(msg, alternative) or msg
+  msg = ('%s%s\nThis feature will be removed in %s version %s'):format(
+    msg,
+    (plugin == 'Nvim' and ' :help deprecated' or ''),
+    plugin,
+    version
+  )
+  local displayed = vim.notify_once(msg, vim.log.levels.WARN)
+  if displayed and backtrace ~= false then
     vim.notify(debug.traceback('', 2):sub(2), vim.log.levels.WARN)
+  end
+  if displayed then
+    return msg
   end
 end
 
@@ -892,6 +978,26 @@ function vim._init_default_mappings()
     anoremenu PopUp.-1-                     <Nop>
     anoremenu PopUp.How-to\ disable\ mouse  <Cmd>help disable-mouse<CR>
   ]])
+end
+
+function vim._init_default_autocmds()
+  local nvim_terminal_augroup = vim.api.nvim_create_augroup('nvim_terminal', {})
+  vim.api.nvim_create_autocmd({ 'bufreadcmd' }, {
+    pattern = 'term://*',
+    group = nvim_terminal_augroup,
+    nested = true,
+    command = "if !exists('b:term_title')|call termopen(matchstr(expand(\"<amatch>\"), '\\c\\mterm://\\%(.\\{-}//\\%(\\d\\+:\\)\\?\\)\\?\\zs.*'), {'cwd': expand(get(matchlist(expand(\"<amatch>\"), '\\c\\mterm://\\(.\\{-}\\)//'), 1, ''))})",
+  })
+  vim.api.nvim_create_autocmd({ 'cmdwinenter' }, {
+    pattern = '[:>]',
+    group = vim.api.nvim_create_augroup('nvim_cmdwin', {}),
+    command = 'syntax sync minlines=1 maxlines=1',
+  })
+end
+
+function vim._init_defaults()
+  vim._init_default_mappings()
+  vim._init_default_autocmds()
 end
 
 require('vim._meta')

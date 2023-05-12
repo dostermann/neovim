@@ -40,15 +40,15 @@ requires a namespace.
 
                                                         *diagnostic-structure*
 A diagnostic is a Lua table with the following keys. Required keys are
-indicated with (*):
+indicated with (+):
 
     bufnr: Buffer number
-    lnum(*): The starting line of the diagnostic
+    lnum(+): The starting line of the diagnostic
     end_lnum: The final line of the diagnostic
-    col(*): The starting column of the diagnostic
+    col(+): The starting column of the diagnostic
     end_col: The final column of the diagnostic
     severity: The severity of the diagnostic |vim.diagnostic.severity|
-    message(*): The diagnostic text
+    message(+): The diagnostic text
     source: The source of the diagnostic
     code: The diagnostic code
     user_data: Arbitrary data plugins or users can add
@@ -295,6 +295,14 @@ DiagnosticSignHint
 DiagnosticSignOk
     Used for "Ok" signs in sign column.
 
+                                                *hl-DiagnosticDeprecated*
+DiagnosticDeprecated
+    Used for deprecated or obsolete code.
+
+                                                *hl-DiagnosticUnnecessary*
+DiagnosticUnnecessary
+    Used for unnecessary or unused code.
+
 ==============================================================================
 SIGNS                                                   *diagnostic-signs*
 
@@ -325,7 +333,7 @@ Example: >lua
     vim.api.nvim_create_autocmd('DiagnosticChanged', {
       callback = function(args)
         local diagnostics = args.data.diagnostics
-        vim.pretty_print(diagnostics)
+        vim.print(diagnostics)
       end,
     })
 <
@@ -384,8 +392,11 @@ config({opts}, {namespace})                          *vim.diagnostic.config()*
                          always show the diagnostic source.
                        • spacing: (number) Amount of empty spaces inserted at
                          the beginning of the virtual text.
-                       • prefix: (string) Prepend diagnostic message with
-                         prefix.
+                       • prefix: (string or function) prepend diagnostic
+                         message with prefix. If a function, it must have the
+                         signature (diagnostic) -> string, where {diagnostic}
+                         is of type |diagnostic-structure|. This can be used
+                         to render diagnostic symbols or error codes.
                        • suffix: (string or function) Append diagnostic
                          message with suffix. If a function, it must have the
                          signature (diagnostic) -> string, where {diagnostic}
@@ -423,25 +434,25 @@ config({opts}, {namespace})                          *vim.diagnostic.config()*
                        severities are displayed before lower severities (e.g.
                        ERROR is displayed before WARN). Options:
                        • reverse: (boolean) Reverse sort order
-      • {namespace}  (number|nil) Update the options for the given namespace.
+      • {namespace}  (integer|nil) Update the options for the given namespace.
                      When omitted, update the global diagnostic options.
 
 disable({bufnr}, {namespace})                       *vim.diagnostic.disable()*
     Disable diagnostics in the given buffer.
 
     Parameters: ~
-      • {bufnr}      (number|nil) Buffer number, or 0 for current buffer. When
-                     omitted, disable diagnostics in all buffers.
-      • {namespace}  (number|nil) Only disable diagnostics for the given
+      • {bufnr}      (integer|nil) Buffer number, or 0 for current buffer.
+                     When omitted, disable diagnostics in all buffers.
+      • {namespace}  (integer|nil) Only disable diagnostics for the given
                      namespace.
 
 enable({bufnr}, {namespace})                         *vim.diagnostic.enable()*
     Enable diagnostics in the given buffer.
 
     Parameters: ~
-      • {bufnr}      (number|nil) Buffer number, or 0 for current buffer. When
-                     omitted, enable diagnostics in all buffers.
-      • {namespace}  (number|nil) Only enable diagnostics for the given
+      • {bufnr}      (integer|nil) Buffer number, or 0 for current buffer.
+                     When omitted, enable diagnostics in all buffers.
+      • {namespace}  (integer|nil) Only enable diagnostics for the given
                      namespace.
 
 fromqflist({list})                               *vim.diagnostic.fromqflist()*
@@ -458,8 +469,8 @@ get({bufnr}, {opts})                                    *vim.diagnostic.get()*
     Get current diagnostics.
 
     Parameters: ~
-      • {bufnr}  (number|nil) Buffer number to get diagnostics from. Use 0 for
-                 current buffer or nil for all buffers.
+      • {bufnr}  (integer|nil) Buffer number to get diagnostics from. Use 0
+                 for current buffer or nil for all buffers.
       • {opts}   (table|nil) A table with the following keys:
                  • namespace: (number) Limit diagnostics to the given
                    namespace.
@@ -473,7 +484,7 @@ get_namespace({namespace})                    *vim.diagnostic.get_namespace()*
     Get namespace metadata.
 
     Parameters: ~
-      • {namespace}  (number) Diagnostic namespace
+      • {namespace}  (integer) Diagnostic namespace
 
     Return: ~
         (table) Namespace metadata
@@ -560,17 +571,17 @@ hide({namespace}, {bufnr})                             *vim.diagnostic.hide()*
     |vim.diagnostic.disable()|.
 
     Parameters: ~
-      • {namespace}  (number|nil) Diagnostic namespace. When omitted, hide diagnostics from all
+      • {namespace}  (integer|nil) Diagnostic namespace. When omitted, hide diagnostics from all
                      namespaces.
-      • {bufnr}      (number|nil) Buffer number, or 0 for current buffer. When
-                     omitted, hide diagnostics in all buffers.
+      • {bufnr}      (integer|nil) Buffer number, or 0 for current buffer.
+                     When omitted, hide diagnostics in all buffers.
 
 is_disabled({bufnr}, {namespace})               *vim.diagnostic.is_disabled()*
     Check whether diagnostics are disabled in a given buffer.
 
     Parameters: ~
-      • {bufnr}      (number|nil) Buffer number, or 0 for current buffer.
-      • {namespace}  (number|nil) Diagnostic namespace. When omitted, checks if all diagnostics are
+      • {bufnr}      (integer|nil) Buffer number, or 0 for current buffer.
+      • {namespace}  (integer|nil) Diagnostic namespace. When omitted, checks if all diagnostics are
                      disabled in {bufnr}. Otherwise, only checks if
                      diagnostics from {namespace} are disabled.
 
@@ -663,7 +674,7 @@ open_float({opts}, {...})                        *vim.diagnostic.open_float()*
                   from |vim.diagnostic.config()|.
 
     Return: ~
-        number|nil, number|nil: ({float_bufnr}, {win_id})
+        integer|nil, integer|nil: ({float_bufnr}, {win_id})
 
 reset({namespace}, {bufnr})                           *vim.diagnostic.reset()*
     Remove all diagnostics from the given namespace.
@@ -674,17 +685,17 @@ reset({namespace}, {bufnr})                           *vim.diagnostic.reset()*
     re-displayed, use |vim.diagnostic.hide()|.
 
     Parameters: ~
-      • {namespace}  (number|nil) Diagnostic namespace. When omitted, remove diagnostics from all
+      • {namespace}  (integer|nil) Diagnostic namespace. When omitted, remove diagnostics from all
                      namespaces.
-      • {bufnr}      (number|nil) Remove diagnostics for the given buffer.
+      • {bufnr}      (integer|nil) Remove diagnostics for the given buffer.
                      When omitted, diagnostics are removed for all buffers.
 
 set({namespace}, {bufnr}, {diagnostics}, {opts})        *vim.diagnostic.set()*
     Set diagnostics for the given namespace and buffer.
 
     Parameters: ~
-      • {namespace}    (number) The diagnostic namespace
-      • {bufnr}        (number) Buffer number
+      • {namespace}    (integer) The diagnostic namespace
+      • {bufnr}        (integer) Buffer number
       • {diagnostics}  (table) A list of diagnostic items
                        |diagnostic-structure|
       • {opts}         (table|nil) Display options to pass to
@@ -723,9 +734,9 @@ show({namespace}, {bufnr}, {diagnostics}, {opts})
     Display diagnostics for the given namespace and buffer.
 
     Parameters: ~
-      • {namespace}    (number|nil) Diagnostic namespace. When omitted, show diagnostics from all
+      • {namespace}    (integer|nil) Diagnostic namespace. When omitted, show diagnostics from all
                        namespaces.
-      • {bufnr}        (number|nil) Buffer number, or 0 for current buffer.
+      • {bufnr}        (integer|nil) Buffer number, or 0 for current buffer.
                        When omitted, show diagnostics in all buffers.
       • {diagnostics}  (table|nil) The diagnostics to display. When omitted,
                        use the saved diagnostics for the given namespace and

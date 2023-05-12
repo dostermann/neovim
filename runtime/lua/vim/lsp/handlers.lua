@@ -117,15 +117,35 @@ M['window/showMessageRequest'] = function(_, result)
 end
 
 --see: https://microsoft.github.io/language-server-protocol/specifications/specification-current/#client_registerCapability
-M['client/registerCapability'] = function(_, _, ctx)
-  local client_id = ctx.client_id
-  local warning_tpl = 'The language server %s triggers a registerCapability '
-    .. 'handler despite dynamicRegistration set to false. '
-    .. 'Report upstream, this warning is harmless'
-  local client = vim.lsp.get_client_by_id(client_id)
-  local client_name = client and client.name or string.format('id=%d', client_id)
-  local warning = string.format(warning_tpl, client_name)
-  log.warn(warning)
+M['client/registerCapability'] = function(_, result, ctx)
+  local log_unsupported = false
+  for _, reg in ipairs(result.registrations) do
+    if reg.method == 'workspace/didChangeWatchedFiles' then
+      require('vim.lsp._watchfiles').register(reg, ctx)
+    else
+      log_unsupported = true
+    end
+  end
+  if log_unsupported then
+    local client_id = ctx.client_id
+    local warning_tpl = 'The language server %s triggers a registerCapability '
+      .. 'handler despite dynamicRegistration set to false. '
+      .. 'Report upstream, this warning is harmless'
+    local client = vim.lsp.get_client_by_id(client_id)
+    local client_name = client and client.name or string.format('id=%d', client_id)
+    local warning = string.format(warning_tpl, client_name)
+    log.warn(warning)
+  end
+  return vim.NIL
+end
+
+--see: https://microsoft.github.io/language-server-protocol/specifications/specification-current/#client_unregisterCapability
+M['client/unregisterCapability'] = function(_, result, ctx)
+  for _, unreg in ipairs(result.unregisterations) do
+    if unreg.method == 'workspace/didChangeWatchedFiles' then
+      require('vim.lsp._watchfiles').unregister(unreg, ctx)
+    end
+  end
   return vim.NIL
 end
 
@@ -344,7 +364,9 @@ function M.hover(_, result, ctx, config)
   local markdown_lines = util.convert_input_to_markdown_lines(result.contents)
   markdown_lines = util.trim_empty_lines(markdown_lines)
   if vim.tbl_isempty(markdown_lines) then
-    vim.notify('No information available')
+    if config.silent ~= true then
+      vim.notify('No information available')
+    end
     return
   end
   return util.open_floating_preview(markdown_lines, 'markdown', config)
@@ -622,4 +644,3 @@ for k, fn in pairs(M) do
 end
 
 return M
--- vim:sw=2 ts=2 et

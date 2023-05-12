@@ -87,7 +87,6 @@
 #include "nvim/quickfix.h"
 #include "nvim/regexp.h"
 #include "nvim/runtime.h"
-#include "nvim/screen.h"
 #include "nvim/search.h"
 #include "nvim/sign.h"
 #include "nvim/spell.h"
@@ -107,8 +106,8 @@
 # include "buffer.c.generated.h"
 #endif
 
-static char *e_auabort = N_("E855: Autocommands caused command to abort");
-static char e_attempt_to_delete_buffer_that_is_in_use_str[]
+static const char *e_auabort = N_("E855: Autocommands caused command to abort");
+static const char e_attempt_to_delete_buffer_that_is_in_use_str[]
   = N_("E937: Attempt to delete a buffer that is in use: %s");
 
 // Number of times free_buffer() was called.
@@ -269,7 +268,7 @@ int open_buffer(int read_stdin, exarg_T *eap, int flags_arg)
     int save_bin = curbuf->b_p_bin;
     int perm;
 
-    perm = os_getperm((const char *)curbuf->b_ffname);
+    perm = os_getperm(curbuf->b_ffname);
     if (perm >= 0 && (0 || S_ISFIFO(perm)
                       || S_ISSOCK(perm)
 # ifdef OPEN_CHR_FILES
@@ -1404,7 +1403,7 @@ int do_buffer(int action, int start, int dir, int count, int forceit)
     if (buf == NULL) {          // No previous buffer, Try 2'nd approach
       forward = true;
       buf = curbuf->b_next;
-      for (;;) {
+      while (true) {
         if (buf == NULL) {
           if (!forward) {               // tried both directions
             break;
@@ -1676,7 +1675,7 @@ void enter_buffer(buf_T *buf)
   maketitle();
   // when autocmds didn't change it
   if (curwin->w_topline == 1 && !curwin->w_topline_was_set) {
-    scroll_cursor_halfway(false);       // redisplay at correct position
+    scroll_cursor_halfway(false, false);  // redisplay at correct position
   }
 
   // Change directories when the 'acd' option is set.
@@ -1688,7 +1687,7 @@ void enter_buffer(buf_T *buf)
   // May need to set the spell language.  Can only do this after the buffer
   // has been properly setup.
   if (!curbuf->b_help && curwin->w_p_spell && *curwin->w_s->b_p_spl != NUL) {
-    (void)did_set_spelllang(curwin);
+    (void)parse_spelllang(curwin);
   }
   curbuf->b_last_used = time(NULL);
 
@@ -2232,7 +2231,7 @@ int buflist_findpat(const char *pattern, const char *pattern_end, bool unlisted,
     // Repeat this for finding an unlisted buffer if there was no matching
     // listed buffer.
 
-    pat = file_pat_to_reg_pat((char *)pattern, (char *)pattern_end, NULL, false);
+    pat = file_pat_to_reg_pat(pattern, pattern_end, NULL, false);
     if (pat == NULL) {
       return -1;
     }
@@ -2242,7 +2241,7 @@ int buflist_findpat(const char *pattern, const char *pattern_end, bool unlisted,
     // First try finding a listed buffer.  If not found and "unlisted"
     // is true, try finding an unlisted buffer.
     find_listed = true;
-    for (;;) {
+    while (true) {
       for (attempt = 0; attempt <= 3; attempt++) {
         // may add '^' and '$'
         if (toggledollar) {
@@ -3181,7 +3180,7 @@ void fileinfo(int fullname, int shorthelp, int dont_truncate)
   bool dontwrite = bt_dontwrite(curbuf);
   vim_snprintf_add(buffer, IOSIZE, "\"%s%s%s%s%s%s",
                    curbufIsChanged()
-                   ? (shortmess(SHM_MOD) ?  " [+]" : _(" [Modified]")) : " ",
+                   ? (shortmess(SHM_MOD) ? " [+]" : _(" [Modified]")) : " ",
                    (curbuf->b_flags & BF_NOTEDITED) && !dontwrite
                    ? _("[Not edited]") : "",
                    (curbuf->b_flags & BF_NEW) && !dontwrite
@@ -3310,8 +3309,7 @@ void maketitle(void)
                                      SPACE_FOR_FNAME + 1);
         buf_p += MIN(size, SPACE_FOR_FNAME);
       } else {
-        buf_p += transstr_buf((const char *)path_tail(curbuf->b_fname),
-                              buf_p, SPACE_FOR_FNAME + 1, true);
+        buf_p += transstr_buf(path_tail(curbuf->b_fname), -1, buf_p, SPACE_FOR_FNAME + 1, true);
       }
 
       switch (bufIsChanged(curbuf)
@@ -3472,8 +3470,8 @@ void free_titles(void)
 
 #endif
 
-/// Get relative cursor position in window into "buf[buflen]", in the form 99%,
-/// using "Top", "Bot" or "All" when appropriate.
+/// Get relative cursor position in window into "buf[buflen]", in the localized
+/// percentage form like %99, 99%; using "Top", "Bot" or "All" when appropriate.
 void get_rel_pos(win_T *wp, char *buf, int buflen)
 {
   // Need at least 3 chars for writing.
@@ -3497,9 +3495,20 @@ void get_rel_pos(win_T *wp, char *buf, int buflen)
   } else if (above <= 0) {
     xstrlcpy(buf, _("Top"), (size_t)buflen);
   } else {
-    vim_snprintf(buf, (size_t)buflen, "%2d%%", above > 1000000L
-                 ? (int)(above / ((above + below) / 100L))
-                 : (int)(above * 100L / (above + below)));
+    int perc = (above > 1000000L
+                ? (int)(above / ((above + below) / 100L))
+                : (int)(above * 100L / (above + below)));
+
+    char *p = buf;
+    size_t l = (size_t)buflen;
+    if (perc < 10) {
+      // prepend one space
+      buf[0] = ' ';
+      p++;
+      l--;
+    }
+    // localized percentage value
+    vim_snprintf(p, l, _("%d%%"), perc);
   }
 }
 
@@ -3558,7 +3567,7 @@ void fname_expand(buf_T *buf, char **ffname, char **sfname)
 #ifdef MSWIN
   if (!buf->b_p_bin) {
     // If the file name is a shortcut file, use the file it links to.
-    char *rfname = os_resolve_shortcut((const char *)(*ffname));
+    char *rfname = os_resolve_shortcut(*ffname);
     if (rfname != NULL) {
       xfree(*ffname);
       *ffname = rfname;
@@ -3600,6 +3609,10 @@ void ex_buffer_all(exarg_T *eap)
     all = true;
   }
 
+  // Stop Visual mode, the cursor and "VIsual" may very well be invalid after
+  // switching to another buffer.
+  reset_VIsual_and_resel();
+
   setpcmark();
 
   // Close superfluous windows (two windows for the same buffer).
@@ -3607,7 +3620,7 @@ void ex_buffer_all(exarg_T *eap)
   if (had_tab > 0) {
     goto_tabpage_tp(first_tabpage, true, true);
   }
-  for (;;) {
+  while (true) {
     tpnext = curtab->tp_next;
     for (wp = firstwin; wp != NULL; wp = wpnext) {
       wpnext = wp->w_next;

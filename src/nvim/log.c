@@ -76,7 +76,7 @@ static void log_path_init(void)
     char *failed_dir = NULL;
     bool log_dir_failure = false;
     if (!os_isdir(loghome)) {
-      log_dir_failure = (os_mkdir_recurse(loghome, 0700, &failed_dir) != 0);
+      log_dir_failure = (os_mkdir_recurse(loghome, 0700, &failed_dir, NULL) != 0);
     }
     XFREE_CLEAR(loghome);
     // Invalid $NVIM_LOG_FILE or failed to expand; fall back to default.
@@ -131,7 +131,7 @@ void log_unlock(void)
 /// @return true if log was emitted normally, false if failed or recursive
 bool logmsg(int log_level, const char *context, const char *func_name, int line_num, bool eol,
             const char *fmt, ...)
-  FUNC_ATTR_UNUSED FUNC_ATTR_PRINTF(6, 7)
+  FUNC_ATTR_PRINTF(6, 7)
 {
   static bool recursive = false;
   static bool did_msg = false;  // Showed recursion message?
@@ -141,9 +141,13 @@ bool logmsg(int log_level, const char *context, const char *func_name, int line_
     return false;
   }
 
-  if (log_level < MIN_LOG_LEVEL) {
+#ifndef NVIM_LOG_DEBUG
+  // This should rarely happen (callsites are compiled out), but to be sure.
+  // TODO(bfredl): allow log levels to be configured at runtime
+  if (log_level < LOGLVL_WRN) {
     return false;
   }
+#endif
 
 #ifdef EXITFREE
   // Logging after we've already started freeing all our memory will only cause

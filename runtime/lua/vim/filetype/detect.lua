@@ -473,12 +473,12 @@ function M.fs(bufnr)
   if vim.g.filetype_fs then
     return vim.g.filetype_fs
   end
-  local line = nextnonblank(bufnr, 1)
-  if findany(line, { '^%s*%.?%( ', '^%s*\\G? ', '^\\$', '^%s*: %S' }) then
-    return 'forth'
-  else
-    return 'fsharp'
+  for _, line in ipairs(getlines(bufnr, 1, 100)) do
+    if line:find('^[:(\\] ') then
+      return 'forth'
+    end
   end
+  return 'fsharp'
 end
 
 function M.git(bufnr)
@@ -1322,6 +1322,46 @@ function M.txt(bufnr)
   end
 end
 
+function M.typ(bufnr)
+  if vim.g.filetype_typ then
+    return vim.g.filetype_typ
+  end
+
+  for _, line in ipairs(getlines(bufnr, 1, 200)) do
+    if
+      findany(line, {
+        '^CASE[%s]?=[%s]?SAME$',
+        '^CASE[%s]?=[%s]?LOWER$',
+        '^CASE[%s]?=[%s]?UPPER$',
+        '^CASE[%s]?=[%s]?OPPOSITE$',
+        '^TYPE%s',
+      })
+    then
+      return 'sql'
+    end
+  end
+
+  return 'typst'
+end
+
+-- Determine if a .v file is Verilog, V, or Coq
+function M.v(bufnr)
+  if vim.fn.did_filetype() ~= 0 then
+    -- Filetype was already detected
+    return
+  end
+  for _, line in ipairs(getlines(bufnr, 1, 200)) do
+    if not line:find('^%s*/') then
+      if findany(line, { ';%s*$', ';%s*/' }) then
+        return 'verilog'
+      elseif findany(line, { '%.%s*$', '%.%s*%(%*' }) then
+        return 'coq'
+      end
+    end
+  end
+  return 'v'
+end
+
 -- WEB (*.web is also used for Winbatch: Guess, based on expecting "%" comment
 -- lines in a WEB file).
 function M.web(bufnr)
@@ -1420,7 +1460,7 @@ local patterns_hashbang = {
 
 ---@private
 -- File starts with "#!".
-local function match_from_hashbang(contents, path)
+local function match_from_hashbang(contents, path, dispatch_extension)
   local first_line = contents[1]
   -- Check for a line like "#!/usr/bin/env {options} bash".  Turn it into
   -- "#!/usr/bin/bash" to make matching easier.
@@ -1473,6 +1513,11 @@ local function match_from_hashbang(contents, path)
       return ft
     end
   end
+
+  -- If nothing matched, check the extension table. For a hashbang like
+  -- '#!/bin/env foo', this will set the filetype to 'fooscript' assuming
+  -- the filetype for the 'foo' extension is 'fooscript' in the extension table.
+  return dispatch_extension(name)
 end
 
 local patterns_text = {
@@ -1545,8 +1590,15 @@ local patterns_text = {
   ['^SNNS pattern definition file'] = 'snnspat',
   ['^SNNS result file'] = 'snnsres',
   ['^%%.-[Vv]irata'] = { 'virata', { start_lnum = 1, end_lnum = 5 } },
-  ['[0-9:%.]* *execve%('] = 'strace',
-  ['^__libc_start_main'] = 'strace',
+  function(lines)
+    if
+      -- inaccurate fast match first, then use accurate slow match
+      (lines[1]:find('execve%(') and lines[1]:find('^[0-9:%.]* *execve%('))
+      or lines[1]:find('^__libc_start_main')
+    then
+      return 'strace'
+    end
+  end,
   -- VSE JCL
   ['^\\* $$ JOB\\>'] = { 'vsejcl', { vim_regex = true } },
   ['^// *JOB\\>'] = { 'vsejcl', { vim_regex = true } },
@@ -1652,10 +1704,10 @@ local function match_from_text(contents, path)
   return cvs_diff(path, contents)
 end
 
-M.match_contents = function(contents, path)
+function M.match_contents(contents, path, dispatch_extension)
   local first_line = contents[1]
   if first_line:find('^#!') then
-    return match_from_hashbang(contents, path)
+    return match_from_hashbang(contents, path, dispatch_extension)
   else
     return match_from_text(contents, path)
   end

@@ -11,6 +11,7 @@
 
 #include "klib/kvec.h"
 #include "msgpack/pack.h"
+#include "nvim/api/keysets.h"
 #include "nvim/api/private/helpers.h"
 #include "nvim/assert.h"
 #include "nvim/event/wstream.h"
@@ -19,7 +20,6 @@
 #include "nvim/types.h"
 
 #ifdef INCLUDE_GENERATED_DECLARATIONS
-# include "keysets.generated.h"  // IWYU pragma: export
 # include "msgpack_rpc/helpers.c.generated.h"
 #endif
 
@@ -84,12 +84,8 @@ bool msgpack_rpc_to_object(const msgpack_object *const obj, Object *const arg)
         *cur.aobj = INTEGER_OBJ((Integer)cur.mobj->via.u64);
       }
       break;
-#ifdef NVIM_MSGPACK_HAS_FLOAT32
     case MSGPACK_OBJECT_FLOAT32:
     case MSGPACK_OBJECT_FLOAT64:
-#else
-    case MSGPACK_OBJECT_FLOAT:
-#endif
     {
       STATIC_ASSERT(sizeof(Float) == sizeof(cur.mobj->via.f64),
                     "Msgpack floating-point size does not match API integer");
@@ -156,12 +152,8 @@ bool msgpack_rpc_to_object(const msgpack_object *const obj, Object *const arg)
           case MSGPACK_OBJECT_BOOLEAN:
           case MSGPACK_OBJECT_POSITIVE_INTEGER:
           case MSGPACK_OBJECT_NEGATIVE_INTEGER:
-#ifdef NVIM_MSGPACK_HAS_FLOAT32
           case MSGPACK_OBJECT_FLOAT32:
           case MSGPACK_OBJECT_FLOAT64:
-#else
-          case MSGPACK_OBJECT_FLOAT:
-#endif
           case MSGPACK_OBJECT_EXT:
           case MSGPACK_OBJECT_MAP:
           case MSGPACK_OBJECT_ARRAY:

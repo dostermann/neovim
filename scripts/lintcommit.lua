@@ -1,13 +1,14 @@
 -- Usage:
 --    # verbose
---    nvim -es +"lua require('scripts.lintcommit').main()"
+--    nvim -l scripts/lintcommit.lua main --trace
 --
 --    # silent
---    nvim -es +"lua require('scripts.lintcommit').main({trace=false})"
+--    nvim -l scripts/lintcommit.lua main
 --
 --    # self-test
---    nvim -es +"lua require('scripts.lintcommit')._test()"
+--    nvim -l scripts/lintcommit.lua _test
 
+--- @type table<string,fun(opt: LintcommitOptions)>
 local M = {}
 
 local _trace = false
@@ -17,11 +18,6 @@ local function p(s)
   vim.cmd('set verbose=1')
   vim.api.nvim_echo({{s, ''}}, false, {})
   vim.cmd('set verbose=0')
-end
-
-local function die()
-  p('')
-  vim.cmd("cquit 1")
 end
 
 -- Executes and returns the output of `cmd`, or nil on failure.
@@ -35,7 +31,7 @@ local function run(cmd, or_die)
   if vim.v.shell_error ~= 0 then
     if or_die then
       p(rv)
-      die()
+      os.exit(1)
     end
     return nil
   end
@@ -51,7 +47,7 @@ local function validate_commit(commit_message)
     return nil
   end
 
-  local commit_split = vim.split(commit_message, ":")
+  local commit_split = vim.split(commit_message, ":", {plain = true})
   -- Return nil if the type is vim-patch since most of the normal rules don't
   -- apply.
   if commit_split[1] == "vim-patch" then
@@ -63,13 +59,22 @@ local function validate_commit(commit_message)
     return [[Commit message is too long, a maximum of 80 characters is allowed.]]
   end
 
+  local before_colon = commit_split[1]
 
-  if vim.tbl_count(commit_split) < 2 then
+  local after_idx = 2
+  if before_colon:match('^[^%(]*%([^%)]*$') then
+    -- Need to find the end of commit scope when commit scope contains colons.
+    while after_idx <= vim.tbl_count(commit_split) do
+      after_idx = after_idx + 1
+      if commit_split[after_idx - 1]:find(')') then
+        break
+      end
+    end
+  end
+  if after_idx > vim.tbl_count(commit_split) then
     return [[Commit message does not include colons.]]
   end
-
-  local before_colon = commit_split[1]
-  local after_colon = commit_split[2]
+  local after_colon = commit_split[after_idx]
 
   -- Check if commit introduces a breaking change.
   if vim.endswith(before_colon, "!") then
@@ -77,18 +82,20 @@ local function validate_commit(commit_message)
   end
 
   -- Check if type is correct
-  local type = vim.split(before_colon, "%(")[1]
-  local allowed_types = {'build', 'ci', 'docs', 'feat', 'fix', 'perf', 'refactor', 'revert', 'test', 'dist', 'vim-patch'}
+  local type = vim.split(before_colon, "(", {plain = true})[1]
+  local allowed_types = {'build', 'ci', 'docs', 'feat', 'fix', 'perf', 'refactor', 'revert', 'test', 'vim-patch'}
   if not vim.tbl_contains(allowed_types, type) then
     return string.format(
-      'Invalid commit type "%s". Allowed types are:\n    %s',
+      [[Invalid commit type "%s". Allowed types are:
+      %s.
+    If none of these seem appropriate then use "fix"]],
       type,
       vim.inspect(allowed_types))
   end
 
   -- Check if scope is appropriate
   if before_colon:match("%(") then
-    local scope = vim.trim(before_colon:match("%((.*)%)"))
+    local scope = vim.trim(commit_message:match("%((.-)%)"))
 
     if scope == '' then
       return [[Scope can't be empty]]
@@ -126,10 +133,10 @@ local function validate_commit(commit_message)
     return [[There should only be one whitespace after the colon.]]
   end
 
-  -- Check that first character after space isn't uppercase.
-  if string.match(after_colon:sub(2,2), '%u') then
-    return [[First character should not be uppercase.]]
-   end
+  -- Allow lowercase or ALL_UPPER but not Titlecase.
+  if after_colon:match('^ *%u%l') then
+    return [[Description first word should not be Capitalized.]]
+  end
 
   -- Check that description isn't just whitespaces
   if vim.trim(after_colon) == "" then
@@ -139,6 +146,7 @@ local function validate_commit(commit_message)
   return nil
 end
 
+--- @param opt? LintcommitOptions
 function M.main(opt)
   _trace = not opt or not not opt.trace
 
@@ -149,10 +157,11 @@ function M.main(opt)
     ancestor = run({'git', 'merge-base', 'upstream/master', branch})
   end
   local commits_str = run({'git', 'rev-list', ancestor..'..'..branch}, true)
+  assert(commits_str)
 
-  local commits = {}
+  local commits = {} --- @type string[]
   for substring in commits_str:gmatch("%S+") do
-     table.insert(commits, substring)
+   table.insert(commits, substring)
   end
 
   local failed = 0
@@ -164,13 +173,16 @@ function M.main(opt)
       local invalid_msg = validate_commit(msg)
       if invalid_msg then
         failed = failed + 1
+
+        -- Some breathing room
+        if failed == 1 then
+          p('\n')
+        end
+
         p(string.format([[
 Invalid commit message: "%s"
     Commit: %s
     %s
-    See also:
-        https://github.com/neovim/neovim/blob/master/CONTRIBUTING.md#commit-messages
-        https://www.conventionalcommits.org/en/v1.0.0/
 ]],
           msg,
           commit_id,
@@ -180,7 +192,12 @@ Invalid commit message: "%s"
   end
 
   if failed > 0 then
-    die()  -- Exit with error.
+        p([[
+See also:
+    https://github.com/neovim/neovim/blob/master/CONTRIBUTING.md#commit-messages
+
+]])
+    os.exit(1)
   else
     p('')
   end
@@ -198,7 +215,6 @@ function M._test()
     ['refactor: normal message'] = true,
     ['revert: normal message'] = true,
     ['test: normal message'] = true,
-    ['dist: normal message'] = true,
     ['ci(window): message with scope'] = true,
     ['ci!: message with breaking change'] = true,
     ['ci(tui)!: message with scope and breaking change'] = true,
@@ -223,8 +239,19 @@ function M._test()
     ['refactor(): empty scope'] = false,
     ['ci( ): whitespace as scope'] = false,
     ['ci: period at end of sentence.'] = false,
-    ['ci: Starting sentence capitalized'] = false,
+    ['ci: Capitalized first word'] = false,
+    ['ci: UPPER_CASE First Word'] = true,
     ['unknown: using unknown type'] = false,
+    ['feat: foo:bar'] = true,
+    ['feat(something): foo:bar'] = true,
+    ['feat(:grep): read from pipe'] = true,
+    ['feat(:grep/:make): read from pipe'] = true,
+    ['feat(:grep): foo:bar'] = true,
+    ['feat(:grep/:make): foo:bar'] = true,
+    ['feat(:grep)'] = false,
+    ['feat(:grep/:make)'] = false,
+    ['feat(:grep'] = false,
+    ['feat(:grep/:make'] = false,
     ['ci: you\'re saying this commit message just goes on and on and on and on and on and on for way too long?'] = false,
   }
 
@@ -238,9 +265,30 @@ function M._test()
   end
 
   if failed > 0 then
-    die()  -- Exit with error.
+    os.exit(1)
   end
 
 end
 
-return M
+--- @class LintcommitOptions
+--- @field trace? boolean
+local opt = {}
+
+for _, a in ipairs(arg) do
+  if vim.startswith(a, '--') then
+    local nm, val = a:sub(3), true
+    if vim.startswith(a, '--no') then
+      nm, val = a:sub(5), false
+    end
+
+    if nm == 'trace' then
+      opt.trace = val
+    end
+  end
+end
+
+for _, a in ipairs(arg) do
+  if M[a] then
+    M[a](opt)
+  end
+end

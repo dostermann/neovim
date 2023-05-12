@@ -6,6 +6,7 @@ local nvim_prog = helpers.nvim_prog
 local funcs = helpers.funcs
 local meths = helpers.meths
 local command = helpers.command
+local dedent = helpers.dedent
 local insert = helpers.insert
 local clear = helpers.clear
 local eq = helpers.eq
@@ -124,6 +125,22 @@ describe('lua stdlib', function()
     eq(1, funcs.luaeval('vim.stricmp("\\0C\\0", "\\0b\\0")'))
     eq(1, funcs.luaeval('vim.stricmp("\\0c\\0", "\\0b\\0")'))
     eq(1, funcs.luaeval('vim.stricmp("\\0C\\0", "\\0B\\0")'))
+  end)
+
+  it('vim.deprecate', function()
+    -- vim.deprecate(name, alternative, version, plugin, backtrace)
+    eq(dedent[[
+      foo.bar() is deprecated, use zub.wooo{ok=yay} instead. :help deprecated
+      This feature will be removed in Nvim version 2.17]],
+      exec_lua('return vim.deprecate(...)', 'foo.bar()', 'zub.wooo{ok=yay}', '2.17'))
+    -- Same message, skipped.
+    eq(vim.NIL,
+      exec_lua('return vim.deprecate(...)', 'foo.bar()', 'zub.wooo{ok=yay}', '2.17'))
+    -- When `plugin` is specified, don't show ":help deprecated". #22235
+    eq(dedent[[
+      foo.bar() is deprecated, use zub.wooo{ok=yay} instead.
+      This feature will be removed in my-plugin.nvim version 0.3.0]],
+      exec_lua('return vim.deprecate(...)', 'foo.bar()', 'zub.wooo{ok=yay}', '0.3.0', 'my-plugin.nvim', false))
   end)
 
   it('vim.startswith', function()
@@ -275,51 +292,53 @@ describe('lua stdlib', function()
     ]]}
   end)
 
-  it("vim.split", function()
-    local split = function(str, sep, kwargs)
-      return exec_lua('return vim.split(...)', str, sep, kwargs)
-    end
-
+  it('vim.gsplit, vim.split', function()
     local tests = {
-      { "a,b", ",", false, false, { 'a', 'b' } },
-      { ":aa::bb:", ":", false, false, { '', 'aa', '', 'bb', '' } },
-      { ":aa::bb:", ":", false, true, { 'aa', '', 'bb' } },
-      { "::ee::ff:", ":", false, false, { '', '', 'ee', '', 'ff', '' } },
-      { "::ee::ff:", ":", false, true, { 'ee', '', 'ff' } },
-      { "ab", ".", false, false, { '', '', '' } },
-      { "a1b2c", "[0-9]", false, false, { 'a', 'b', 'c' } },
-      { "xy", "", false, false, { 'x', 'y' } },
-      { "here be dragons", " ", false, false, { "here", "be", "dragons"} },
-      { "axaby", "ab?", false, false, { '', 'x', 'y' } },
-      { "f v2v v3v w2w ", "([vw])2%1", false, false, { 'f ', ' v3v ', ' ' } },
-      { "", "", false, false, {} },
-      { "", "a", false, false, { '' } },
-      { "x*yz*oo*l", "*", true, false, { 'x', 'yz', 'oo', 'l' } },
+      --                            plain  trimempty
+      { 'a,b',             ',',     false, false, { 'a', 'b' } },
+      { ':aa::::bb:',      ':',     false, false, { '', 'aa', '', '', '', 'bb', '' } },
+      { ':aa::::bb:',      ':',     false, true,  { 'aa', '', '', '', 'bb' } },
+      { 'aa::::bb:',       ':',     false, true,  { 'aa', '', '', '', 'bb' } },
+      { ':aa::bb:',        ':',     false, true,  { 'aa', '', 'bb' } },
+      { '/a/b:/b/\n',      '[:\n]', false, true,  { '/a/b', '/b/' } },
+      { '::ee::ff:',       ':',     false, false, { '', '', 'ee', '', 'ff', '' } },
+      { '::ee::ff::',      ':',     false, true,  { 'ee', '', 'ff' } },
+      { 'ab',              '.',     false, false, { '', '', '' } },
+      { 'a1b2c',           '[0-9]', false, false, { 'a', 'b', 'c' } },
+      { 'xy',              '',      false, false, { 'x', 'y' } },
+      { 'here be dragons', ' ',     false, false, { 'here', 'be', 'dragons'} },
+      { 'axaby',           'ab?',   false, false, { '', 'x', 'y' } },
+      { 'f v2v v3v w2w ',  '([vw])2%1', false, false, { 'f ', ' v3v ', ' ' } },
+      { '',                '',      false, false, {} },
+      { '',                '',      false, true,  {} },
+      { '\n',              '[:\n]', false, true,  {} },
+      { '',                'a',     false, false, { '' } },
+      { 'x*yz*oo*l',       '*',     true,  false, { 'x', 'yz', 'oo', 'l' } },
     }
 
     for _, t in ipairs(tests) do
-      eq(t[5], split(t[1], t[2], {plain=t[3], trimempty=t[4]}))
+      eq(t[5], vim.split(t[1], t[2], {plain=t[3], trimempty=t[4]}), t[1])
     end
 
     -- Test old signature
-    eq({'x', 'yz', 'oo', 'l'}, split("x*yz*oo*l", "*", true))
+    eq({'x', 'yz', 'oo', 'l'}, vim.split("x*yz*oo*l", "*", true))
 
     local loops = {
       { "abc", ".-" },
     }
 
     for _, t in ipairs(loops) do
-      matches("Infinite loop detected", pcall_err(split, t[1], t[2]))
+      matches("Infinite loop detected", pcall_err(vim.split, t[1], t[2]))
     end
 
     -- Validates args.
-    eq(true, pcall(split, 'string', 'string'))
+    eq(true, pcall(vim.split, 'string', 'string'))
     matches('s: expected string, got number',
-      pcall_err(split, 1, 'string'))
+      pcall_err(vim.split, 1, 'string'))
     matches('sep: expected string, got number',
-      pcall_err(split, 'string', 1))
-    matches('kwargs: expected table, got number',
-      pcall_err(split, 'string', 'string', 1))
+      pcall_err(vim.split, 'string', 1))
+    matches('opts: expected table, got number',
+      pcall_err(vim.split, 'string', 'string', 1))
   end)
 
   it('vim.trim', function()
@@ -444,6 +463,22 @@ describe('lua stdlib', function()
       pcall_err(exec_lua, [[return vim.pesc(2)]]))
   end)
 
+  it('vim.list_contains', function()
+    eq(true, exec_lua("return vim.list_contains({'a','b','c'}, 'c')"))
+    eq(false, exec_lua("return vim.list_contains({'a','b','c'}, 'd')"))
+  end)
+
+  it('vim.tbl_contains', function()
+    eq(true, exec_lua("return vim.tbl_contains({'a','b','c'}, 'c')"))
+    eq(false, exec_lua("return vim.tbl_contains({'a','b','c'}, 'd')"))
+    eq(true, exec_lua("return vim.tbl_contains({[2]='a',foo='b',[5] = 'c'}, 'c')"))
+    eq(true, exec_lua([[
+        return vim.tbl_contains({ 'a', { 'b', 'c' } }, function(v)
+          return vim.deep_equal(v, { 'b', 'c' })
+        end, { predicate = true })
+    ]]))
+  end)
+
   it('vim.tbl_keys', function()
     eq({}, exec_lua("return vim.tbl_keys({})"))
     for _, v in pairs(exec_lua("return vim.tbl_keys({'a', 'b', 'c'})")) do
@@ -488,6 +523,19 @@ describe('lua stdlib', function()
     ]]))
   end)
 
+  it('vim.tbl_isarray', function()
+    eq(true, exec_lua("return vim.tbl_isarray({})"))
+    eq(false, exec_lua("return vim.tbl_isarray(vim.empty_dict())"))
+    eq(true, exec_lua("return vim.tbl_isarray({'a', 'b', 'c'})"))
+    eq(false, exec_lua("return vim.tbl_isarray({'a', '32', a='hello', b='baz'})"))
+    eq(false, exec_lua("return vim.tbl_isarray({1, a='hello', b='baz'})"))
+    eq(false, exec_lua("return vim.tbl_isarray({a='hello', b='baz', 1})"))
+    eq(false, exec_lua("return vim.tbl_isarray({1, 2, nil, a='hello'})"))
+    eq(true, exec_lua("return vim.tbl_isarray({1, 2, nil, 4})"))
+    eq(true, exec_lua("return vim.tbl_isarray({nil, 2, 3, 4})"))
+    eq(false, exec_lua("return vim.tbl_isarray({1, [1.5]=2, [3]=3})"))
+  end)
+
   it('vim.tbl_islist', function()
     eq(true, exec_lua("return vim.tbl_islist({})"))
     eq(false, exec_lua("return vim.tbl_islist(vim.empty_dict())"))
@@ -496,6 +544,9 @@ describe('lua stdlib', function()
     eq(false, exec_lua("return vim.tbl_islist({1, a='hello', b='baz'})"))
     eq(false, exec_lua("return vim.tbl_islist({a='hello', b='baz', 1})"))
     eq(false, exec_lua("return vim.tbl_islist({1, 2, nil, a='hello'})"))
+    eq(false, exec_lua("return vim.tbl_islist({1, 2, nil, 4})"))
+    eq(false, exec_lua("return vim.tbl_islist({nil, 2, 3, 4})"))
+    eq(false, exec_lua("return vim.tbl_islist({1, [1.5]=2, [3]=3})"))
   end)
 
   it('vim.tbl_isempty', function()
@@ -1458,7 +1509,7 @@ describe('lua stdlib', function()
     ]]
     eq('', funcs.luaeval "vim.bo.filetype")
     eq(true, funcs.luaeval "vim.bo[BUF].modifiable")
-    matches("no such option: 'nosuchopt'$",
+    matches("Invalid option %(not found%): 'nosuchopt'$",
        pcall_err(exec_lua, 'return vim.bo.nosuchopt'))
     matches("Expected lua string$",
        pcall_err(exec_lua, 'return vim.bo[0][0].autoread'))
@@ -1479,7 +1530,7 @@ describe('lua stdlib', function()
     eq(0, funcs.luaeval "vim.wo.cole")
     eq(0, funcs.luaeval "vim.wo[0].cole")
     eq(0, funcs.luaeval "vim.wo[1001].cole")
-    matches("no such option: 'notanopt'$",
+    matches("Invalid option %(not found%): 'notanopt'$",
        pcall_err(exec_lua, 'return vim.wo.notanopt'))
     matches("Expected lua string$",
        pcall_err(exec_lua, 'return vim.wo[0][0].list'))
@@ -2269,7 +2320,7 @@ describe('lua stdlib', function()
 
   describe('vim.region', function()
     it('charwise', function()
-      insert(helpers.dedent( [[
+      insert(dedent( [[
       text tααt tααt text
       text tαxt txtα tex
       text tαxt tαxt
@@ -2279,6 +2330,10 @@ describe('lua stdlib', function()
     it('blockwise', function()
       insert([[αα]])
       eq({0,5}, exec_lua[[ return vim.region(0,{0,0},{0,4},'3',true)[0] ]])
+    end)
+    it('getpos() input', function()
+      insert('getpos')
+      eq({0,6}, exec_lua[[ return vim.region(0,{0,0},'.','v',true)[0] ]])
     end)
   end)
 
@@ -2704,11 +2759,11 @@ describe('lua stdlib', function()
     it('does not cause ml_get errors with invalid visual selection', function()
       -- Should be fixed by vim-patch:8.2.4028.
       exec_lua [[
-        local a = vim.api
-        local t = function(s) return a.nvim_replace_termcodes(s, true, true, true) end
-        a.nvim_buf_set_lines(0, 0, -1, true, {"a", "b", "c"})
-        a.nvim_feedkeys(t "G<C-V>", "txn", false)
-        a.nvim_buf_call(a.nvim_create_buf(false, true), function() vim.cmd "redraw" end)
+        local api = vim.api
+        local t = function(s) return api.nvim_replace_termcodes(s, true, true, true) end
+        api.nvim_buf_set_lines(0, 0, -1, true, {"a", "b", "c"})
+        api.nvim_feedkeys(t "G<C-V>", "txn", false)
+        api.nvim_buf_call(api.nvim_create_buf(false, true), function() vim.cmd "redraw" end)
       ]]
     end)
 
@@ -2783,29 +2838,29 @@ describe('lua stdlib', function()
     it('does not cause ml_get errors with invalid visual selection', function()
       -- Add lines to the current buffer and make another window looking into an empty buffer.
       exec_lua [[
-        _G.a = vim.api
-        _G.t = function(s) return a.nvim_replace_termcodes(s, true, true, true) end
-        _G.win_lines = a.nvim_get_current_win()
+        _G.api = vim.api
+        _G.t = function(s) return api.nvim_replace_termcodes(s, true, true, true) end
+        _G.win_lines = api.nvim_get_current_win()
         vim.cmd "new"
-        _G.win_empty = a.nvim_get_current_win()
-        a.nvim_set_current_win(win_lines)
-        a.nvim_buf_set_lines(0, 0, -1, true, {"a", "b", "c"})
+        _G.win_empty = api.nvim_get_current_win()
+        api.nvim_set_current_win(win_lines)
+        api.nvim_buf_set_lines(0, 0, -1, true, {"a", "b", "c"})
       ]]
 
       -- Start Visual in current window, redraw in other window with fewer lines.
       -- Should be fixed by vim-patch:8.2.4018.
       exec_lua [[
-        a.nvim_feedkeys(t "G<C-V>", "txn", false)
-        a.nvim_win_call(win_empty, function() vim.cmd "redraw" end)
+        api.nvim_feedkeys(t "G<C-V>", "txn", false)
+        api.nvim_win_call(win_empty, function() vim.cmd "redraw" end)
       ]]
 
       -- Start Visual in current window, extend it in other window with more lines.
       -- Fixed for win_execute by vim-patch:8.2.4026, but nvim_win_call should also not be affected.
       exec_lua [[
-        a.nvim_feedkeys(t "<Esc>gg", "txn", false)
-        a.nvim_set_current_win(win_empty)
-        a.nvim_feedkeys(t "gg<C-V>", "txn", false)
-        a.nvim_win_call(win_lines, function() a.nvim_feedkeys(t "G<C-V>", "txn", false) end)
+        api.nvim_feedkeys(t "<Esc>gg", "txn", false)
+        api.nvim_set_current_win(win_empty)
+        api.nvim_feedkeys(t "gg<C-V>", "txn", false)
+        api.nvim_win_call(win_lines, function() api.nvim_feedkeys(t "G<C-V>", "txn", false) end)
         vim.cmd "redraw"
       ]]
     end)
@@ -2819,14 +2874,14 @@ describe('lua stdlib', function()
       }
       screen:attach()
       exec_lua [[
-        _G.a = vim.api
+        _G.api = vim.api
         vim.opt.ruler = true
         local lines = {}
         for i = 0, 499 do lines[#lines + 1] = tostring(i) end
-        a.nvim_buf_set_lines(0, 0, -1, true, lines)
-        a.nvim_win_set_cursor(0, {20, 0})
+        api.nvim_buf_set_lines(0, 0, -1, true, lines)
+        api.nvim_win_set_cursor(0, {20, 0})
         vim.cmd "split"
-        _G.win = a.nvim_get_current_win()
+        _G.win = api.nvim_get_current_win()
         vim.cmd "wincmd w | redraw"
       ]]
       screen:expect [[
@@ -2837,7 +2892,7 @@ describe('lua stdlib', function()
                                       |
       ]]
       exec_lua [[
-        a.nvim_win_call(win, function() a.nvim_win_set_cursor(0, {100, 0}) end)
+        api.nvim_win_call(win, function() api.nvim_win_set_cursor(0, {100, 0}) end)
         vim.cmd "redraw"
       ]]
       screen:expect [[
@@ -2898,8 +2953,93 @@ describe('lua stdlib', function()
         return a
       ]])
     end)
+
+    it('accepts the key name', function()
+      eq({ b = 'b', c = 'c' }, exec_lua [[
+        local a = vim.defaulttable(function(k) return k end)
+        local _ = a.b
+        local _ = a.c
+        return a
+      ]])
+    end)
   end)
 
+  it('vim.lua_omnifunc', function()
+    local screen = Screen.new(60,5)
+    screen:set_default_attr_ids {
+      [1] = {foreground = Screen.colors.Blue1, bold = true};
+      [2] = {background = Screen.colors.WebGray};
+      [3] = {background = Screen.colors.LightMagenta};
+      [4] = {bold = true};
+      [5] = {foreground = Screen.colors.SeaGreen, bold = true};
+    }
+    screen:attach()
+    command [[ set omnifunc=v:lua.vim.lua_omnifunc ]]
+
+    -- Note: the implementation is shared with lua command line completion.
+    -- More tests for completion in lua/command_line_completion_spec.lua
+    feed [[ivim.insp<c-x><c-o>]]
+    screen:expect{grid=[[
+      vim.inspect^                                                 |
+      {1:~  }{2: inspect        }{1:                                         }|
+      {1:~  }{3: inspect_pos    }{1:                                         }|
+      {1:~                                                           }|
+      {4:-- Omni completion (^O^N^P) }{5:match 1 of 2}                    |
+    ]]}
+  end)
+
+  it('vim.print', function()
+    -- vim.print() returns its args.
+    eq({42, 'abc', { a = { b = 77 }}},
+      exec_lua[[return {vim.print(42, 'abc', { a = { b = 77 }})}]])
+
+    -- vim.print() pretty-prints the args.
+    eq(dedent[[
+
+      42
+      abc
+      {
+        a = {
+          b = 77
+        }
+      }]],
+      eval[[execute('lua vim.print(42, "abc", { a = { b = 77 }})')]])
+  end)
+
+  it('vim.F.if_nil', function()
+    local function if_nil(...)
+      return exec_lua([[
+        local args = {...}
+        local nargs = select('#', ...)
+        for i = 1, nargs do
+          if args[i] == vim.NIL then
+            args[i] = nil
+          end
+        end
+        return vim.F.if_nil(unpack(args, 1, nargs))
+      ]], ...)
+    end
+
+    local a = NIL
+    local b = NIL
+    local c = 42
+    local d = false
+    eq(42, if_nil(a, c))
+    eq(false, if_nil(d, b))
+    eq(42, if_nil(a, b, c, d))
+    eq(false, if_nil(d))
+    eq(false, if_nil(d, c))
+    eq(NIL, if_nil(a))
+  end)
+
+  it('lpeg', function()
+    eq(5, exec_lua [[
+      local m = vim.lpeg
+      return m.match(m.R'09'^1, '4504ab')
+    ]])
+
+    eq(4, exec_lua [[ return vim.re.match("abcde", '[a-c]+') ]])
+  end)
 end)
 
 describe('lua: builtin modules', function()

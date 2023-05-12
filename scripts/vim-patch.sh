@@ -212,7 +212,7 @@ preprocess_patch() {
   2>/dev/null $nvim --cmd 'set dir=/tmp' +'g@^diff --git a/src/testdir/\<\%('"${na_src_testdir}"'\)\>@norm! d/\v(^diff)|%$' +w +q "$file"
 
   # Remove testdir/test_*.vim files
-  local na_src_testdir='balloon.*\|channel.*\|crypt\.vim\|cscope\.vim\|gui.*\|hardcopy\.vim\|job_fails\.vim\|json\.vim\|mzscheme\.vim\|netbeans.*\|paste\.vim\|popupwin.*\|restricted\.vim\|shortpathname\.vim\|tcl\.vim\|terminal.*\|xxd\.vim'
+  local na_src_testdir='balloon.*\|behave\.vim\|channel.*\|crypt\.vim\|cscope\.vim\|gui.*\|hardcopy\.vim\|job_fails\.vim\|json\.vim\|mzscheme\.vim\|netbeans.*\|paste\.vim\|popupwin.*\|python2\.vim\|pyx2\.vim\|restricted\.vim\|shortpathname\.vim\|tcl\.vim\|terminal.*\|xxd\.vim'
   2>/dev/null $nvim --cmd 'set dir=/tmp' +'g@^diff --git a/src/testdir/\<test_\%('"${na_src_testdir}"'\)\>@norm! d/\v(^diff)|%$' +w +q "$file"
 
   # Remove version.c #7555
@@ -225,6 +225,10 @@ preprocess_patch() {
   # Remove vimrc_example.vim
   local na_vimrcexample='vimrc_example\.vim'
   2>/dev/null $nvim --cmd 'set dir=/tmp' +'g@^diff --git a/runtime/\<\%('${na_vimrcexample}'\)\>@norm! d/\v(^diff)|%$' +w +q "$file"
+
+  # Rename src/testdir/ paths to test/old/testdir/
+  LC_ALL=C sed -e 's/\( [ab]\)\/src\/testdir/\1\/test\/old\/testdir/g' \
+    "$file" > "$file".tmp && mv "$file".tmp "$file"
 
   # Rename src/ paths to src/nvim/
   LC_ALL=C sed -e 's/\( [ab]\/src\)/\1\/nvim/g' \
@@ -594,6 +598,7 @@ _set_missing_vimpatches() {
   # Massage arguments for git-log.
   declare -A git_log_replacements=(
     [^\(.*/\)?src/nvim/\(.*\)]="\${BASH_REMATCH[1]}src/\${BASH_REMATCH[2]}"
+    [^\(.*/\)?test/old/\(.*\)]="\${BASH_REMATCH[1]}src/\${BASH_REMATCH[2]}"
     [^\(.*/\)?\.vim-src/\(.*\)]="\${BASH_REMATCH[2]}"
   )
   local i j

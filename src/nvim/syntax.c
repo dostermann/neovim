@@ -58,7 +58,13 @@ static bool did_syntax_onoff = false;
 #define SPO_LC_OFF      6       // leading context offset
 #define SPO_COUNT       7
 
-static char e_illegal_arg[] = N_("E390: Illegal argument: %s");
+static const char e_illegal_arg[] = N_("E390: Illegal argument: %s");
+static const char e_contains_argument_not_accepted_here[]
+  = N_("E395: Contains argument not accepted here");
+static const char e_invalid_cchar_value[]
+  = N_("E844: Invalid cchar value");
+static const char e_trailing_char_after_rsb_str_str[]
+  = N_("E890: Trailing char after ']': %s]%s");
 
 // The patterns that are being searched for are stored in a syn_pattern.
 // A match item consists of one pattern.
@@ -619,7 +625,7 @@ static void syn_sync(win_T *wp, linenr_T start_lnum, synstate_T *last_valid)
 
       for (current_lnum = lnum; current_lnum < end_lnum; current_lnum++) {
         syn_start_line();
-        for (;;) {
+        while (true) {
           had_sync_point = syn_finish_line(true);
           // When a sync point has been found, remember where, and
           // continue to look for another one, further on in the line.
@@ -1218,7 +1224,6 @@ static synstate_T *store_current_state(void)
 // Copy a state stack from "from" in b_sst_array[] to current_state;
 static void load_current_state(synstate_T *from)
 {
-  int i;
   bufstate_T *bp;
 
   clear_current_state();
@@ -1231,7 +1236,7 @@ static void load_current_state(synstate_T *from)
     } else {
       bp = from->sst_union.sst_stack;
     }
-    for (i = 0; i < from->sst_stacksize; i++) {
+    for (int i = 0; i < from->sst_stacksize; i++) {
       CUR_STATE(i).si_idx = bp[i].bs_idx;
       CUR_STATE(i).si_flags = bp[i].bs_flags;
       CUR_STATE(i).si_seqnr = bp[i].bs_seqnr;
@@ -2071,7 +2076,7 @@ static void check_state_ends(void)
   int had_extend;
 
   cur_si = &CUR_STATE(current_state.ga_len - 1);
-  for (;;) {
+  while (true) {
     if (cur_si->si_ends
         && (cur_si->si_m_endpos.lnum < current_lnum
             || (cur_si->si_m_endpos.lnum == current_lnum
@@ -2384,7 +2389,7 @@ static void find_endpos(int idx, lpos_T *startpos, lpos_T *m_endpos, lpos_T *hl_
   }
 
   // Find the SKIP or first END pattern after the last START pattern.
-  for (;;) {
+  while (true) {
     spp = &(SYN_ITEMS(syn_block)[idx]);
     if (spp->sp_type != SPTYPE_START) {
       break;
@@ -2411,7 +2416,7 @@ static void find_endpos(int idx, lpos_T *startpos, lpos_T *m_endpos, lpos_T *hl_
   // use syntax iskeyword option
   save_chartab(buf_chartab);
 
-  for (;;) {
+  while (true) {
     // Find end pattern that matches first after "matchcol".
     best_idx = -1;
     for (idx = start_idx; idx < syn_block->b_syn_patterns.ga_len; idx++) {
@@ -3441,9 +3446,7 @@ static void syn_list_one(const int id, const bool syncing, const bool link_only)
 
 static void syn_list_flags(struct name_list *nlist, int flags, int attr)
 {
-  int i;
-
-  for (i = 0; nlist[i].flag != 0; i++) {
+  for (int i = 0; nlist[i].flag != 0; i++) {
     if (flags & nlist[i].flag) {
       msg_puts_attr(nlist[i].name, attr);
       msg_putchar(' ');
@@ -3646,7 +3649,7 @@ static bool syn_list_keywords(const int id, const hashtab_T *const ht, bool did_
             prev_skipempty = (kp->flags & HL_SKIPEMPTY);
           }
         }
-        msg_outtrans((char *)kp->keyword);
+        msg_outtrans(kp->keyword);
       }
     }
   }
@@ -3677,7 +3680,7 @@ static void syn_clear_keyword(int id, hashtab_T *ht)
           if (kp_next == NULL) {
             hash_remove(ht, hi);
           } else {
-            hi->hi_key = (char *)KE2HIKEY(kp_next);
+            hi->hi_key = KE2HIKEY(kp_next);
           }
         } else {
           kp_prev->ke_next = kp_next;
@@ -3752,7 +3755,7 @@ static void add_keyword(char *const name, const int id, const int flags,
   hashtab_T *const ht = (curwin->w_s->b_syn_ic)
       ? &curwin->w_s->b_keywtab_ic
       : &curwin->w_s->b_keywtab;
-  hashitem_T *const hi = hash_lookup(ht, (const char *)kp->keyword,
+  hashitem_T *const hi = hash_lookup(ht, kp->keyword,
                                      strlen(kp->keyword), hash);
 
   // even though it looks like only the kp->keyword member is
@@ -3766,7 +3769,7 @@ static void add_keyword(char *const name, const int id, const int flags,
   } else {
     // keyword already exists, prepend to list
     kp->ke_next = HI2KE(hi);
-    hi->hi_key = (char *)KE2HIKEY(kp);
+    hi->hi_key = KE2HIKEY(kp);
   }
 }
 
@@ -3841,7 +3844,7 @@ static char *get_syn_options(char *arg, syn_opt_arg_T *opt, int *conceal_char, i
     opt->flags |= HL_CONCEAL;
   }
 
-  for (;;) {
+  while (true) {
     // This is used very often when a large number of keywords is defined.
     // Need to skip quickly when no option name is found.
     // Also avoid tolower(), it's slow.
@@ -3877,7 +3880,7 @@ static char *get_syn_options(char *arg, syn_opt_arg_T *opt, int *conceal_char, i
 
     if (flagtab[fidx].argtype == 1) {
       if (!opt->has_cont_list) {
-        emsg(_("E395: contains argument not accepted here"));
+        emsg(_(e_contains_argument_not_accepted_here));
         return NULL;
       }
       if (get_id_list(&arg, 8, &opt->cont_list, skip) == FAIL) {
@@ -3896,7 +3899,7 @@ static char *get_syn_options(char *arg, syn_opt_arg_T *opt, int *conceal_char, i
       *conceal_char = utf_ptr2char(arg + 6);
       arg += utfc_ptr2len(arg + 6) - 1;
       if (!vim_isprintc_strict(*conceal_char)) {
-        emsg(_("E844: invalid cchar value"));
+        emsg(_(e_invalid_cchar_value));
         return NULL;
       }
       arg = skipwhite(arg + 7);
@@ -4029,7 +4032,7 @@ static void syn_cmd_include(exarg_T *eap, int syncing)
   prev_toplvl_grp = curwin->w_s->b_syn_topgrp;
   curwin->w_s->b_syn_topgrp = sgl_id;
   if (source
-      ? do_source(eap->arg, false, DOSO_NONE) == FAIL
+      ? do_source(eap->arg, false, DOSO_NONE, NULL) == FAIL
       : source_runtime(eap->arg, DIP_ALL) == FAIL) {
     semsg(_(e_notopen), eap->arg);
   }
@@ -4114,8 +4117,7 @@ static void syn_cmd_keyword(exarg_T *eap, int syncing)
             }
             if (p[1] == ']') {
               if (p[2] != NUL) {
-                semsg(_("E890: trailing char after ']': %s]%s"),
-                      kw, &p[2]);
+                semsg(_(e_trailing_char_after_rsb_str_str), kw, &p[2]);
                 goto error;
               }
               kw = p + 1;
@@ -4678,7 +4680,7 @@ static void syn_cmd_cluster(exarg_T *eap, int syncing)
     }
     scl_id -= SYNID_CLUSTER;
 
-    for (;;) {
+    while (true) {
       if (STRNICMP(rest, "add", 3) == 0
           && (ascii_iswhite(rest[3]) || rest[3] == '=')) {
         opt_len = 3;
@@ -4736,17 +4738,15 @@ static void init_syn_patterns(void)
 /// @return  a pointer to the next argument, or NULL in case of an error.
 static char *get_syn_pattern(char *arg, synpat_T *ci)
 {
-  char *end;
   int *p;
   int idx;
-  char *cpo_save;
 
   // need at least three chars
   if (arg == NULL || arg[0] == NUL || arg[1] == NUL || arg[2] == NUL) {
     return NULL;
   }
 
-  end = skip_regexp(arg + 1, *arg, true);
+  char *end = skip_regexp(arg + 1, *arg, true);
   if (*end != *arg) {                       // end delimiter not found
     semsg(_("E401: Pattern delimiter not found: %s"), arg);
     return NULL;
@@ -4755,7 +4755,7 @@ static char *get_syn_pattern(char *arg, synpat_T *ci)
   ci->sp_pattern = xstrnsave(arg + 1, (size_t)(end - arg) - 1);
 
   // Make 'cpoptions' empty, to avoid the 'l' flag
-  cpo_save = p_cpo;
+  char *cpo_save = p_cpo;
   p_cpo = empty_option;
   ci->sp_prog = vim_regcomp(ci->sp_pattern, RE_MAGIC);
   p_cpo = cpo_save;
@@ -5145,7 +5145,6 @@ static int in_id_list(stateitem_T *cur_si, int16_t *list, struct sp_syn *ssp, in
 {
   int retval;
   int16_t *scl_list;
-  int16_t item;
   int16_t id = ssp->id;
   static int depth = 0;
   int r;
@@ -5181,7 +5180,7 @@ static int in_id_list(stateitem_T *cur_si, int16_t *list, struct sp_syn *ssp, in
   // If the first item is "ALLBUT", return true if "id" is NOT in the
   // contains list.  We also require that "id" is at the same ":syn include"
   // level as the list.
-  item = *list;
+  int16_t item = *list;
   if (item >= SYNID_ALLBUT && item < SYNID_CLUSTER) {
     if (item < SYNID_TOP) {
       // ALL or ALLBUT: accept all groups in the same file
@@ -5291,9 +5290,6 @@ void ex_syntax(exarg_T *eap)
 
 void ex_ownsyntax(exarg_T *eap)
 {
-  char *old_value;
-  char *new_value;
-
   if (curwin->w_s == &curwin->w_buffer->b_s) {
     curwin->w_s = xcalloc(1, sizeof(synblock_T));
     hash_init(&curwin->w_s->b_keywtab);
@@ -5309,7 +5305,7 @@ void ex_ownsyntax(exarg_T *eap)
   }
 
   // Save value of b:current_syntax.
-  old_value = get_var_value("b:current_syntax");
+  char *old_value = get_var_value("b:current_syntax");
   if (old_value != NULL) {
     old_value = xstrdup(old_value);
   }
@@ -5318,7 +5314,7 @@ void ex_ownsyntax(exarg_T *eap)
   apply_autocmds(EVENT_SYNTAX, eap->arg, curbuf->b_fname, true, curbuf);
 
   // Move value of b:current_syntax to w:current_syntax.
-  new_value = get_var_value("b:current_syntax");
+  char *new_value = get_var_value("b:current_syntax");
   if (new_value != NULL) {
     set_internal_string_var("w:current_syntax", new_value);
   }
@@ -5379,7 +5375,7 @@ void set_context_in_syntax_cmd(expand_T *xp, const char *arg)
   }
 
   // (part of) subcommand already typed
-  const char *p = (const char *)skiptowhite(arg);
+  const char *p = skiptowhite(arg);
   if (*p == NUL) {
     return;
   }
@@ -5483,10 +5479,9 @@ int get_syntax_info(int *seqnrp)
 int syn_get_concealed_id(win_T *wp, linenr_T lnum, colnr_T col)
 {
   int seqnr;
-  int syntax_flags;
 
   (void)syn_get_id(wp, lnum, col, false, NULL, false);
-  syntax_flags = get_syntax_info(&seqnr);
+  int syntax_flags = get_syntax_info(&seqnr);
 
   if (syntax_flags & HL_CONCEAL) {
     return seqnr;

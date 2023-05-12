@@ -1,9 +1,7 @@
 # Luarocks recipe. Luarocks is only required when building Neovim.
 # NOTE: LuaRocks rocks need to "DEPENDS" on the previous module, because
 #       running luarocks in parallel will break, e.g. when some rocks have
-#       the same dependency..
-
-option(USE_BUNDLED_BUSTED "Use the bundled version of busted to run tests." ON)
+#       the same dependency.
 
 # The luarocks binary location
 set(LUAROCKS_BINARY ${DEPS_BIN_DIR}/luarocks)
@@ -30,7 +28,7 @@ if(UNIX)
     list(APPEND LUAROCKS_OPTS
       --with-lua=${DEPS_INSTALL_DIR})
   else()
-    find_package(LuaJit)
+    find_package(Luajit)
     if(LUAJIT_FOUND)
       list(APPEND LUAROCKS_OPTS
         --with-lua-include=${LUAJIT_INCLUDE_DIRS}
@@ -81,9 +79,6 @@ else()
   message(FATAL_ERROR "Trying to build luarocks in an unsupported system ${CMAKE_SYSTEM_NAME}/${CMAKE_C_COMPILER_ID}")
 endif()
 
-if(USE_EXISTING_SRC_DIR)
-  unset(LUAROCKS_URL)
-endif()
 ExternalProject_Add(luarocks
   URL ${LUAROCKS_URL}
   URL_HASH SHA256=${LUAROCKS_SHA256}
@@ -94,8 +89,6 @@ ExternalProject_Add(luarocks
   BUILD_COMMAND ""
   INSTALL_COMMAND "${LUAROCKS_INSTALL_COMMAND}")
 
-list(APPEND THIRD_PARTY_DEPS luarocks)
-
 if(USE_BUNDLED_LUAJIT)
   add_dependencies(luarocks luajit)
 elseif(USE_BUNDLED_LUA)
@@ -103,78 +96,38 @@ elseif(USE_BUNDLED_LUA)
 endif()
 set(ROCKS_DIR ${DEPS_LIB_DIR}/luarocks/rocks-${LUA_VERSION})
 
-# mpack
-add_custom_command(OUTPUT ${ROCKS_DIR}/mpack
-  COMMAND ${LUAROCKS_BINARY} build mpack 1.0.8-0 ${LUAROCKS_BUILDARGS}
-  DEPENDS luarocks)
-add_custom_target(mpack DEPENDS ${ROCKS_DIR}/mpack)
-list(APPEND THIRD_PARTY_DEPS mpack)
-
-# lpeg
-add_custom_command(OUTPUT ${ROCKS_DIR}/lpeg
-  COMMAND ${LUAROCKS_BINARY} build lpeg 1.0.2-1 ${LUAROCKS_BUILDARGS}
-  DEPENDS mpack)
-add_custom_target(lpeg DEPENDS ${ROCKS_DIR}/lpeg)
-list(APPEND THIRD_PARTY_DEPS lpeg)
-
-if((NOT USE_BUNDLED_LUAJIT) AND USE_BUNDLED_LUA)
-  # luabitop
-  add_custom_command(OUTPUT ${ROCKS_DIR}/luabitop
-    COMMAND ${LUAROCKS_BINARY} build luabitop 1.0.2-3 ${LUAROCKS_BUILDARGS}
-    DEPENDS lpeg)
-  add_custom_target(luabitop DEPENDS ${ROCKS_DIR}/luabitop)
-  list(APPEND THIRD_PARTY_DEPS luabitop)
+if(MSVC)
+  # Workaround for luarocks failing to find the md5sum.exe it is shipped with.
+  list(APPEND LUAROCKS_BUILDARGS MD5SUM=md5sum)
+  set(PATH PATH=${DEPS_INSTALL_DIR}/luarocks/tools;$ENV{PATH})
 endif()
 
-if(USE_BUNDLED_BUSTED)
-  if((NOT USE_BUNDLED_LUAJIT) AND USE_BUNDLED_LUA)
-    set(PENLIGHT_DEPENDS luabitop)
+set(CURRENT_DEP luarocks)
+
+function(Download ROCK VER)
+  if(ARGV2)
+    set(OUTPUT ${ARGV2})
   else()
-    set(PENLIGHT_DEPENDS lpeg)
+    set(OUTPUT ${ROCKS_DIR}/${ROCK})
   endif()
+  add_custom_command(OUTPUT ${OUTPUT}
+    COMMAND ${CMAKE_COMMAND} -E env "${PATH}" ${LUAROCKS_BINARY} build ${ROCK} ${VER} ${LUAROCKS_BUILDARGS}
+    DEPENDS ${CURRENT_DEP})
+  add_custom_target(${ROCK} ALL DEPENDS ${OUTPUT})
+  set(CURRENT_DEP ${ROCK} PARENT_SCOPE)
+endfunction()
 
-  # penlight
-  add_custom_command(OUTPUT ${ROCKS_DIR}/penlight
-    COMMAND ${LUAROCKS_BINARY} build penlight 1.5.4-1 ${LUAROCKS_BUILDARGS}
-    DEPENDS ${PENLIGHT_DEPENDS})
-  add_custom_target(penlight DEPENDS ${ROCKS_DIR}/penlight)
+if(WIN32)
+  set(BUSTED_EXE "${DEPS_BIN_DIR}/busted.bat")
+  set(LUACHECK_EXE "${DEPS_BIN_DIR}/luacheck.bat")
+else()
+  set(BUSTED_EXE "${DEPS_BIN_DIR}/busted")
+  set(LUACHECK_EXE "${DEPS_BIN_DIR}/luacheck")
+endif()
 
-  # busted
-  if(WIN32)
-    set(BUSTED_EXE "${DEPS_BIN_DIR}/busted.bat")
-    set(LUACHECK_EXE "${DEPS_BIN_DIR}/luacheck.bat")
-  else()
-    set(BUSTED_EXE "${DEPS_BIN_DIR}/busted")
-    set(LUACHECK_EXE "${DEPS_BIN_DIR}/luacheck")
-  endif()
-  add_custom_command(OUTPUT ${BUSTED_EXE}
-    COMMAND ${LUAROCKS_BINARY} build busted 2.1.1 ${LUAROCKS_BUILDARGS}
-    DEPENDS penlight)
-  add_custom_target(busted DEPENDS ${BUSTED_EXE})
+Download(busted 2.1.1 ${BUSTED_EXE})
+Download(luacheck 1.1.0-1 ${LUACHECK_EXE})
 
-  # luacheck
-  add_custom_command(OUTPUT ${LUACHECK_EXE}
-    COMMAND ${LUAROCKS_BINARY} build luacheck 0.23.0-1 ${LUAROCKS_BUILDARGS}
-    DEPENDS busted)
-  add_custom_target(luacheck DEPENDS ${LUACHECK_EXE})
-
-  # luv
-  set(LUV_DEPS luacheck)
-  if(USE_BUNDLED_LUV)
-    set(NVIM_CLIENT_DEPS luacheck luv-static lua-compat-5.3)
-  else()
-    add_custom_command(OUTPUT ${ROCKS_DIR}/luv
-      COMMAND ${LUAROCKS_BINARY} build luv ${LUV_VERSION} ${LUAROCKS_BUILDARGS}
-      DEPENDS luacheck)
-    add_custom_target(luv DEPENDS ${ROCKS_DIR}/luv)
-    set(NVIM_CLIENT_DEPS luv)
-  endif()
-
-  # nvim-client: https://github.com/neovim/lua-client
-  add_custom_command(OUTPUT ${ROCKS_DIR}/nvim-client
-    COMMAND ${LUAROCKS_BINARY} build nvim-client 0.2.4-1 ${LUAROCKS_BUILDARGS}
-    DEPENDS ${NVIM_CLIENT_DEPS})
-  add_custom_target(nvim-client DEPENDS ${ROCKS_DIR}/nvim-client)
-
-  list(APPEND THIRD_PARTY_DEPS busted luacheck nvim-client)
+if (USE_BUNDLED_LUA OR NOT USE_BUNDLED_LUAJIT)
+  Download(coxpcall 1.17.0-1)
 endif()

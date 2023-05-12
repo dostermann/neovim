@@ -5,8 +5,7 @@ local feed, command = helpers.feed, helpers.command
 local insert = helpers.insert
 local eq = helpers.eq
 local eval = helpers.eval
-local funcs, meths, exec_lua = helpers.funcs, helpers.meths, helpers.exec_lua
-local is_os = helpers.is_os
+local funcs, meths = helpers.funcs, helpers.meths
 
 describe('screen', function()
   local screen
@@ -61,6 +60,7 @@ local function screen_tests(linegrid)
       [5] = {background = Screen.colors.LightGrey, underline = true, bold = true, foreground = Screen.colors.Fuchsia},
       [6] = {bold = true, foreground = Screen.colors.Fuchsia},
       [7] = {bold = true, foreground = Screen.colors.SeaGreen},
+      [8] = {foreground = Screen.colors.White, background = Screen.colors.Red},
     } )
   end)
 
@@ -116,77 +116,6 @@ local function screen_tests(linegrid)
       command('set title')
       screen:expect(function()
         eq(expected, screen.title)
-      end)
-    end)
-
-    it('has correct default title with unnamed file', function()
-      local expected = '[No Name] - NVIM'
-      command('set title')
-      screen:expect(function()
-        eq(expected, screen.title)
-      end)
-    end)
-
-    it('has correct default title with named file', function()
-      local expected = (is_os('win') and 'myfile (C:\\mydir) - NVIM' or 'myfile (/mydir) - NVIM')
-      command('set title')
-      command(is_os('win') and 'file C:\\mydir\\myfile' or 'file /mydir/myfile')
-      screen:expect(function()
-        eq(expected, screen.title)
-      end)
-    end)
-
-    describe('is not changed by', function()
-      local file1 = is_os('win') and 'C:\\mydir\\myfile1' or '/mydir/myfile1'
-      local file2 = is_os('win') and 'C:\\mydir\\myfile2' or '/mydir/myfile2'
-      local expected = (is_os('win') and 'myfile1 (C:\\mydir) - NVIM' or 'myfile1 (/mydir) - NVIM')
-      local buf2
-
-      before_each(function()
-        command('edit '..file1)
-        buf2 = funcs.bufadd(file2)
-        command('set title')
-      end)
-
-      it('calling setbufvar() to set an option in a hidden buffer from i_CTRL-R', function()
-        command([[inoremap <F2> <C-R>=setbufvar(]]..buf2..[[, '&autoindent', 1) ? '' : ''<CR>]])
-        feed('i<F2><Esc>')
-        command('redraw!')
-        screen:expect(function()
-          eq(expected, screen.title)
-        end)
-      end)
-
-      it('an RPC call to nvim_buf_set_option in a hidden buffer', function()
-        meths.buf_set_option(buf2, 'autoindent', true)
-        command('redraw!')
-        screen:expect(function()
-          eq(expected, screen.title)
-        end)
-      end)
-
-      it('a Lua callback calling nvim_buf_set_option in a hidden buffer', function()
-        exec_lua(string.format([[
-          vim.schedule(function()
-            vim.api.nvim_buf_set_option(%d, 'autoindent', true)
-          end)
-        ]], buf2))
-        command('redraw!')
-        screen:expect(function()
-          eq(expected, screen.title)
-        end)
-      end)
-
-      it('a Lua callback calling nvim_buf_call in a hidden buffer', function()
-        exec_lua(string.format([[
-          vim.schedule(function()
-            vim.api.nvim_buf_call(%d, function() end)
-          end)
-        ]], buf2))
-        command('redraw!')
-        screen:expect(function()
-          eq(expected, screen.title)
-        end)
       end)
     end)
   end)
@@ -866,12 +795,9 @@ local function screen_tests(linegrid)
   end)
 
   describe('resize', function()
-    before_each(function()
+    it('rebuilds the whole screen', function()
       screen:try_resize(25, 5)
       feed('iresize')
-    end)
-
-    it('rebuilds the whole screen', function()
       screen:expect([[
         resize^                   |
         {0:~                        }|
@@ -882,6 +808,7 @@ local function screen_tests(linegrid)
     end)
 
     it('has minimum width/height values', function()
+      feed('iresize')
       screen:try_resize(1, 1)
       screen:expect([[
         resize^      |
@@ -896,7 +823,8 @@ local function screen_tests(linegrid)
     end)
 
     it('VimResized autocommand does not cause invalid UI events #20692 #20759', function()
-      feed('<Esc>')
+      screen:try_resize(25, 5)
+      feed('iresize<Esc>')
       command([[autocmd VimResized * redrawtabline]])
       command([[autocmd VimResized * lua vim.api.nvim_echo({ { 'Hello' } }, false, {})]])
       command([[autocmd VimResized * let g:echospace = v:echospace]])
@@ -918,6 +846,77 @@ local function screen_tests(linegrid)
                                       |
       ]])
       eq(29, meths.get_var('echospace'))
+    end)
+
+    it('messages from the same Ex command as resize are visible #22225', function()
+      feed(':set columns=20 | call<CR>')
+      screen:expect([[
+                            |
+                            |
+                            |
+                            |
+                            |
+                            |
+                            |
+                            |
+                            |
+        {1:                    }|
+        {8:E471: Argument requi}|
+        {8:red}                 |
+        {7:Press ENTER or type }|
+        {7:command to continue}^ |
+      ]])
+      feed('<CR>')
+      screen:expect([[
+        ^                    |
+        {0:~                   }|
+        {0:~                   }|
+        {0:~                   }|
+        {0:~                   }|
+        {0:~                   }|
+        {0:~                   }|
+        {0:~                   }|
+        {0:~                   }|
+        {0:~                   }|
+        {0:~                   }|
+        {0:~                   }|
+        {0:~                   }|
+                            |
+      ]])
+      feed(':set columns=0<CR>')
+      screen:expect([[
+                    |
+                    |
+                    |
+                    |
+                    |
+        {1:            }|
+        {8:E594: Need a}|
+        {8:t least 12 c}|
+        {8:olumns: colu}|
+        {8:mns=0}       |
+        {7:Press ENTER }|
+        {7:or type comm}|
+        {7:and to conti}|
+        {7:nue}^         |
+      ]])
+      feed('<CR>')
+      screen:expect([[
+        ^            |
+        {0:~           }|
+        {0:~           }|
+        {0:~           }|
+        {0:~           }|
+        {0:~           }|
+        {0:~           }|
+        {0:~           }|
+        {0:~           }|
+        {0:~           }|
+        {0:~           }|
+        {0:~           }|
+        {0:~           }|
+                    |
+      ]])
     end)
   end)
 

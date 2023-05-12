@@ -36,7 +36,6 @@
 #include "nvim/plines.h"
 #include "nvim/pos.h"
 #include "nvim/regexp.h"
-#include "nvim/screen.h"
 #include "nvim/search.h"
 #include "nvim/strings.h"
 #include "nvim/textformat.h"
@@ -428,7 +427,7 @@ int get_indent_str_vtab(const char *ptr, long ts, long *vts, bool list)
       } else {
         // In list mode, when tab is not set, count screen char width
         // for Tab, displays: ^I
-        count += ptr2cells((char *)ptr);
+        count += ptr2cells(ptr);
       }
     } else if (*ptr == ' ') {
       count++;  // count a space for one
@@ -460,7 +459,6 @@ int set_indent(int size, int flags)
   int line_len;
   int doit = false;
   int ind_done = 0;  // Measured in spaces.
-  int ind_col = 0;
   int tab_pad;
   int retval = false;
 
@@ -479,6 +477,7 @@ int set_indent(int size, int flags)
   // 'preserveindent' are set count the number of characters at the
   // beginning of the line to be copied.
   if (!curbuf->b_p_et || (!(flags & SIN_INSERT) && curbuf->b_p_pi)) {
+    int ind_col = 0;
     // If 'preserveindent' is set then reuse as much as possible of
     // the existing indent structure for the new indent.
     if (!(flags & SIN_INSERT) && curbuf->b_p_pi) {
@@ -528,7 +527,7 @@ int set_indent(int size, int flags)
     }
 
     // Count tabs required for indent.
-    for (;;) {
+    while (true) {
       tab_pad = tabstop_padding(ind_col, curbuf->b_p_ts, curbuf->b_p_vts_array);
       if (todo < tab_pad) {
         break;
@@ -651,7 +650,7 @@ int set_indent(int size, int flags)
       p = skipwhite(p);
     }
 
-    for (;;) {
+    while (true) {
       tab_pad = tabstop_padding(ind_done,
                                 curbuf->b_p_ts,
                                 curbuf->b_p_vts_array);
@@ -803,11 +802,12 @@ bool briopt_check(win_T *wp)
 int get_breakindent_win(win_T *wp, char *line)
   FUNC_ATTR_NONNULL_ALL
 {
-  static int prev_indent = 0;  // Cached indent value.
-  static long prev_ts = 0L;  // Cached tabstop value.
-  static const char *prev_line = NULL;  // cached pointer to line.
-  static varnumber_T prev_tick = 0;  // Changedtick of cached value.
-  static long *prev_vts = NULL;  // Cached vartabs values.
+  static int prev_indent = 0;  // cached indent value
+  static long prev_ts = 0L;  // cached tabstop value
+  static int prev_fnum = 0;  // cached buffer number
+  static char *prev_line = NULL;  // cached copy of "line"
+  static varnumber_T prev_tick = 0;  // changedtick of cached value
+  static long *prev_vts = NULL;  // cached vartabs values
   static int prev_list = 0;  // cached list value
   static int prev_listopt = 0;  // cached w_p_briopt_list value
   static char *prev_flp = NULL;  // cached formatlistpat value
@@ -818,16 +818,24 @@ int get_breakindent_win(win_T *wp, char *line)
                           && (vim_strchr(p_cpo, CPO_NUMCOL) == NULL) ? number_width(wp) + 1 : 0);
 
   // used cached indent, unless
-  // - line pointer changed
+  // - buffer changed
   // - 'tabstop' changed
+  // - buffer was changed
   // - 'briopt_list changed' changed or
   // - 'formatlistpattern' changed
-  if (prev_line != line || prev_ts != wp->w_buffer->b_p_ts
+  // - line changed
+  // - 'vartabs' changed
+  if (prev_fnum != wp->w_buffer->b_fnum
+      || prev_ts != wp->w_buffer->b_p_ts
       || prev_tick != buf_get_changedtick(wp->w_buffer)
       || prev_listopt != wp->w_briopt_list
-      || (prev_flp == NULL || (strcmp(prev_flp, get_flp_value(wp->w_buffer)) != 0))
+      || prev_flp == NULL
+      || strcmp(prev_flp, get_flp_value(wp->w_buffer)) != 0
+      || prev_line == NULL || strcmp(prev_line, line) != 0
       || prev_vts != wp->w_buffer->b_p_vts_array) {
-    prev_line = line;
+    prev_fnum = wp->w_buffer->b_fnum;
+    xfree(prev_line);
+    prev_line = xstrdup(line);
     prev_ts = wp->w_buffer->b_p_ts;
     prev_tick = buf_get_changedtick(wp->w_buffer);
     prev_vts = wp->w_buffer->b_p_vts_array;
@@ -936,14 +944,10 @@ void ex_retab(exarg_T *eap)
   long num_spaces = 0;
   long num_tabs;
   long len;
-  long col;
-  long vcol;
   long start_col = 0;                   // For start of white-space string
   long start_vcol = 0;                  // For start of white-space string
   long old_len;
-  char *ptr;
   char *new_line = (char *)1;  // init to non-NULL
-  bool did_undo;                         // called u_save for current line
   long *new_vts_array = NULL;
   char *new_ts_str;  // string value of tab argument
 
@@ -972,11 +976,11 @@ void ex_retab(exarg_T *eap)
     new_ts_str = xstrnsave(new_ts_str, (size_t)(eap->arg - new_ts_str));
   }
   for (lnum = eap->line1; !got_int && lnum <= eap->line2; lnum++) {
-    ptr = ml_get(lnum);
-    col = 0;
-    vcol = 0;
-    did_undo = false;
-    for (;;) {
+    char *ptr = ml_get(lnum);
+    long col = 0;
+    long vcol = 0;
+    bool did_undo = false;  // called u_save for current line
+    while (true) {
       if (ascii_iswhite(ptr[col])) {
         if (!got_tab && num_spaces == 0) {
           // First consecutive white-space
@@ -1118,6 +1122,7 @@ int get_expr_indent(void)
   int save_set_curswant;
   int save_State;
   int use_sandbox = was_set_insecurely(curwin, "indentexpr", OPT_LOCAL);
+  const sctx_T save_sctx = current_sctx;
 
   // Save and restore cursor position and curswant, in case it was changed
   // * via :normal commands.
@@ -1130,6 +1135,7 @@ int get_expr_indent(void)
     sandbox++;
   }
   textlock++;
+  current_sctx = curbuf->b_p_script_ctx[BV_INDE].script_ctx;
 
   // Need to make a copy, the 'indentexpr' option could be changed while
   // evaluating it.
@@ -1141,6 +1147,7 @@ int get_expr_indent(void)
     sandbox--;
   }
   textlock--;
+  current_sctx = save_sctx;
 
   // Restore the cursor position so that 'indentexpr' doesn't need to.
   // Pretend to be in Insert mode, allow cursor past end of line for "o"
@@ -1186,10 +1193,6 @@ int get_lisp_indent(void)
   pos_T *pos, realpos, paren;
   int amount;
   char *that;
-  colnr_T col;
-  colnr_T firsttry;
-  int parencount;
-  int quotecount;
   int vi_lisp;
 
   // Set vi_lisp to use the vi-compatible method.
@@ -1213,7 +1216,7 @@ int get_lisp_indent(void)
     // Extra trick: Take the indent of the first previous non-white
     // line that is at the same () level.
     amount = -1;
-    parencount = 0;
+    int parencount = 0;
 
     while (--curwin->w_cursor.lnum >= pos->lnum) {
       if (linewhite(curwin->w_cursor.lnum)) {
@@ -1268,7 +1271,7 @@ int get_lisp_indent(void)
     if (amount == -1) {
       curwin->w_cursor.lnum = pos->lnum;
       curwin->w_cursor.col = pos->col;
-      col = pos->col;
+      colnr_T col = pos->col;
 
       that = get_cursor_line_ptr();
 
@@ -1298,7 +1301,7 @@ int get_lisp_indent(void)
             that++;
             amount++;
           }
-          firsttry = amount;
+          colnr_T firsttry = amount;
 
           init_chartabsize_arg(&cts, curwin, (colnr_T)(that - line),
                                amount, line, that);
@@ -1319,13 +1322,13 @@ int get_lisp_indent(void)
             }
 
             parencount = 0;
-            quotecount = 0;
 
             init_chartabsize_arg(&cts, curwin,
                                  (colnr_T)(that - line), amount, line, that);
             if (vi_lisp || ((*that != '"') && (*that != '\'')
                             && (*that != '#')
                             && (((uint8_t)(*that) < '0') || ((uint8_t)(*that) > '9')))) {
+              int quotecount = 0;
               while (*cts.cts_ptr
                      && (!ascii_iswhite(*cts.cts_ptr) || quotecount || parencount)
                      && (!((*cts.cts_ptr == '(' || *cts.cts_ptr == '[')
@@ -1373,12 +1376,11 @@ int get_lisp_indent(void)
 static int lisp_match(char *p)
 {
   char buf[LSIZE];
-  int len;
   char *word = *curbuf->b_p_lw != NUL ? curbuf->b_p_lw : p_lispwords;
 
   while (*word != NUL) {
     (void)copy_option_part(&word, buf, LSIZE, ",");
-    len = (int)strlen(buf);
+    int len = (int)strlen(buf);
 
     if ((strncmp(buf, p, (size_t)len) == 0) && ascii_iswhite_or_nul(p[len])) {
       return true;

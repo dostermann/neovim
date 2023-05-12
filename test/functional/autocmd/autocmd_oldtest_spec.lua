@@ -4,10 +4,7 @@ local clear = helpers.clear
 local eq = helpers.eq
 local meths = helpers.meths
 local funcs = helpers.funcs
-
-local exec = function(str)
-  meths.exec(str, false)
-end
+local exec = helpers.exec
 
 describe('oldtests', function()
   before_each(clear)
@@ -53,6 +50,7 @@ describe('oldtests', function()
   it('should fire on unload buf', function()
     funcs.writefile({'Test file Xxx1'}, 'Xxx1')
     funcs.writefile({'Test file Xxx2'}, 'Xxx2')
+    local fname = 'Xtest_functional_autocmd_unload'
 
     local content = [[
       func UnloadAllBufs()
@@ -72,15 +70,15 @@ describe('oldtests', function()
       q
     ]]
 
-    funcs.writefile(funcs.split(content, "\n"), 'Xtest')
+    funcs.writefile(funcs.split(content, "\n"), fname)
 
     funcs.delete('Xout')
-    funcs.system(meths.get_vvar('progpath') .. ' -u NORC -i NONE -N -S Xtest')
+    funcs.system(string.format('%s -u NORC -i NONE -N -S %s', meths.get_vvar('progpath'), fname))
     eq(1, funcs.filereadable('Xout'))
 
     funcs.delete('Xxx1')
     funcs.delete('Xxx2')
-    funcs.delete('Xtest')
+    funcs.delete(fname)
     funcs.delete('Xout')
   end)
 end)

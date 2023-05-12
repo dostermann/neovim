@@ -220,7 +220,7 @@ tag		char	      note action in Normal mode	~
 |CTRL-\_CTRL-N|	CTRL-\ CTRL-N	   go to Normal mode (no-op)
 |CTRL-\_CTRL-G|	CTRL-\ CTRL-G	   go to Normal mode (no-op)
 		CTRL-\ a - z	   reserved for extensions
-		CTRL-\ others      not used
+		CTRL-\ others	   not used
 |CTRL-]|	CTRL-]		   :ta to ident under cursor
 |CTRL-^|	CTRL-^		   edit Nth alternate file (equivalent to
 				   ":e #N")
@@ -233,7 +233,7 @@ tag		char	      note action in Normal mode	~
 				2  filter Nmove text through the {filter}
 				   command
 |!!|		!!{filter}	2  filter N lines through the {filter} command
-|quote|		"{register}  	   use {register} for next delete, yank or put
+|quote|		"{register}	   use {register} for next delete, yank or put
 				   ({.%#:} only work with put)
 |#|		#		1  search backward for the Nth occurrence of
 				   the ident under the cursor
@@ -1159,7 +1159,6 @@ tag		command		action ~
 |:badd|		:bad[d]		add buffer to the buffer list
 |:balt|		:balt		like ":badd" but also set the alternate file
 |:bdelete|	:bd[elete]	remove a buffer from the buffer list
-|:behave|	:be[have]	set mouse and selection behavior
 |:belowright|	:bel[owright]	make split window appear right or below
 |:bfirst|	:bf[irst]	go to first buffer in the buffer list
 |:blast|	:bl[ast]	go to last buffer in the buffer list

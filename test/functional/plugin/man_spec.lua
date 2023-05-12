@@ -8,8 +8,28 @@ local nvim_prog = helpers.nvim_prog
 local matches = helpers.matches
 local write_file = helpers.write_file
 local tmpname = helpers.tmpname
+local eq = helpers.eq
 local skip = helpers.skip
 local is_ci = helpers.is_ci
+
+-- Collects all names passed to find_path() after attempting ":Man foo".
+local function get_search_history(name)
+  local args = vim.split(name, ' ')
+  local code = [[
+    local args = ...
+    local man = require('runtime.lua.man')
+    local res = {}
+    man.find_path = function(sect, name)
+      table.insert(res, {sect, name})
+      return nil
+    end
+    local ok, rv = pcall(man.open_page, -1, {tab = 0}, args)
+    assert(not ok)
+    assert(rv and rv:match('no manual entry'))
+    return res
+  ]]
+  return exec_lua(code, args)
+end
 
 clear()
 if funcs.executable('man') == 0 then
@@ -172,5 +192,36 @@ describe(':Man', function()
       'man.lua: "no manual entry for %s"'):format(actual_file),
       funcs.system(args, {''}))
     os.remove(actual_file)
+  end)
+
+  it('tries variants with spaces, underscores #22503', function()
+    eq({
+       {'', 'NAME WITH SPACES'},
+       {'', 'NAME_WITH_SPACES'},
+      }, get_search_history('NAME WITH SPACES'))
+    eq({
+       {'3', 'some other man'},
+       {'3', 'some_other_man'},
+      }, get_search_history('3 some other man'))
+    eq({
+       {'3x', 'some other man'},
+       {'3x', 'some_other_man'},
+      }, get_search_history('3X some other man'))
+    eq({
+       {'3tcl', 'some other man'},
+       {'3tcl', 'some_other_man'},
+      }, get_search_history('3tcl some other man'))
+    eq({
+       {'n', 'some other man'},
+       {'n', 'some_other_man'},
+      }, get_search_history('n some other man'))
+    eq({
+       {'', '123some other man'},
+       {'', '123some_other_man'},
+      }, get_search_history('123some other man'))
+    eq({
+       {'1', 'other_man'},
+       {'1', 'other_man'},
+      }, get_search_history('other_man(1)'))
   end)
 end)

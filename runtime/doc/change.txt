@@ -276,7 +276,9 @@ gr{char}		Replace the virtual characters under the cursor with
 			{char}.  This replaces in screen space, not file
 			space.  See |gR| and |Virtual-Replace-mode| for more
 			details.  As with |r| a count may be given.
-			{char} can be entered like with |r|.
+			{char} can be entered like with |r|, but characters
+			that have a special meaning in Insert mode, such as
+			most CTRL-keys, cannot be used.
 
 						*digraph-arg*
 The argument for Normal mode commands like |r| and |t| is a single character.
@@ -424,6 +426,11 @@ zeros cause mistakes, because they can be confused with octal numbers.
 Note similarly, when 'nrformats' includes "bin", binary numbers with a leading
 '0x' or '0X' can be interpreted as hexadecimal rather than binary since '0b'
 are valid hexadecimal digits.
+
+When the number under the cursor is too big to fit into 64 bits, it will be
+rounded off to the nearest number that can be represented, and the
+addition/subtraction is skipped.  E.g. CTRL-X on 18446744073709551616 results
+in 18446744073709551615.  Same for larger numbers, such as 18446744073709551618.
 
 The CTRL-A command is very useful in a macro.  Example: Use the following
 steps to make a numbered list.
@@ -574,18 +581,29 @@ with ".".  Vim does not recognize a comment (starting with '"') after the
 {Visual}=		Filter the highlighted lines like with ={motion}.
 
 
-						*tempfile* *setuid*
-Vim uses temporary files for filtering, generating diffs and also for
-tempname().  For Unix, the file will be in a private directory (only
-accessible by the current user) to avoid security problems (e.g., a symlink
-attack or other people reading your file).  When Vim exits the directory and
-all files in it are deleted.  When Vim has the setuid bit set this may cause
-problems, the temp file is owned by the setuid user but the filter command
-probably runs as the original user.
-Directory for temporary files is created in the first possible directory of:
+						*tempdir* *tempfile* *setuid*
+Nvim uses temporary files for filtering and generating diffs. Plugins also
+commonly use |tempname()| for their own purposes. On the first request for
+a temporary file, Nvim creates a common directory (the "Nvim tempdir"), to
+serve as storage for all temporary files (including `stdpath("run")` files
+|$XDG_RUNTIME_DIR|) in the current session.
+
+The Nvim tempdir is created in the first available system tempdir:
 	Unix:    $TMPDIR, /tmp, current-dir, $HOME.
 	Windows: $TMPDIR, $TMP, $TEMP, $USERPROFILE, current-dir.
 
+On unix the tempdir is created with permissions 0700 (only accessible by the
+current user) to avoid security problems (e.g. symlink attacks).  On exit,
+Nvim deletes the tempdir and its contents.
+							*E5431*
+If you see an error or |log| message like: >
+	E5431: tempdir disappeared (2 times)
+this means an external process on your system deleted the Nvim tempdir.
+Typically this is caused by "antivirus" or a misconfigured cleanup service.
+
+If Nvim has the setuid bit set this may cause problems: the temp file
+is owned by the setuid user but the filter command probably runs as the
+original user.
 
 
 4.2 Substitute						*:substitute*
@@ -976,7 +994,7 @@ inside of strings can change!  Also see 'softtabstop' option. >
 <			to display registers '1' and 'a'.  Spaces are allowed
 			in {arg}.
 
-							*:di* *:display*
+							*:di* *:dis* *:display*
 :di[splay] [arg]	Same as :registers.
 
 							*y* *yank*
@@ -1711,8 +1729,6 @@ value	action	~
 Note that when 'textwidth' is 0, Vim does no automatic formatting anyway (but
 does insert comment leaders according to the 'comments' option).  An exception
 is when the 'a' flag is present. |auto-format|
-
-Note that when 'paste' is on, Vim does no formatting at all.
 
 Note that 'textwidth' can be non-zero even if Vim never performs auto-wrapping;
 'textwidth' is still useful for formatting with "gq".

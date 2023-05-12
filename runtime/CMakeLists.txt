@@ -1,4 +1,4 @@
-set(SYN_VIM_GENERATOR ${PROJECT_SOURCE_DIR}/scripts/genvimvim.lua)
+set(SYN_VIM_GENERATOR ${PROJECT_SOURCE_DIR}/src/nvim/generators/gen_vimvim.lua)
 set(GENERATED_RUNTIME_DIR ${PROJECT_BINARY_DIR}/runtime)
 set(GENERATED_SYN_VIM ${GENERATED_RUNTIME_DIR}/syntax/vim/generated.vim)
 set(GENERATED_HELP_TAGS ${GENERATED_RUNTIME_DIR}/doc/tags)
@@ -9,10 +9,13 @@ file(MAKE_DIRECTORY ${GENERATED_RUNTIME_DIR})
 file(MAKE_DIRECTORY ${GENERATED_RUNTIME_DIR}/syntax)
 file(MAKE_DIRECTORY ${GENERATED_RUNTIME_DIR}/syntax/vim)
 
+get_directory_property(LUA_GEN DIRECTORY ${PROJECT_SOURCE_DIR}/src/nvim DEFINITION LUA_GEN)
+get_directory_property(LUA_GEN_DEPS DIRECTORY ${PROJECT_SOURCE_DIR}/src/nvim DEFINITION LUA_GEN_DEPS)
+
 add_custom_command(OUTPUT ${GENERATED_SYN_VIM}
-  COMMAND ${LUA_PRG} ${SYN_VIM_GENERATOR}
-          ${PROJECT_SOURCE_DIR}/src/nvim ${GENERATED_SYN_VIM} ${FUNCS_DATA}
+  COMMAND ${LUA_GEN} ${SYN_VIM_GENERATOR} ${GENERATED_SYN_VIM} ${FUNCS_DATA}
   DEPENDS
+    ${LUA_GEN_DEPS}
     ${SYN_VIM_GENERATOR}
     ${PROJECT_SOURCE_DIR}/src/nvim/ex_cmds.lua
     ${PROJECT_SOURCE_DIR}/src/nvim/auevents.lua
@@ -116,23 +119,17 @@ install_helper(
   FILES ${CMAKE_CURRENT_SOURCE_DIR}/nvim.png
   DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/icons/hicolor/128x128/apps)
 
-install_helper(
-  FILES ${CMAKE_CURRENT_SOURCE_DIR}/neovim.ico
-  DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/nvim/runtime)
+glob_wrapper(RUNTIME_ROOT_FILES *.vim *.lua *.ico)
+install_helper(FILES ${RUNTIME_ROOT_FILES}
+               DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/nvim/runtime/)
 
-globrecurse_wrapper(RUNTIME_PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR} *.awk *.sh *.bat)
-
-foreach(PROG ${RUNTIME_PROGRAMS})
-  get_filename_component(BASEDIR ${PROG} DIRECTORY)
-  install_helper(PROGRAMS ${PROG}
-                 DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/nvim/runtime/${BASEDIR})
+glob_wrapper(RUNTIME_DIRS */)
+foreach(D ${RUNTIME_DIRS})
+  if(IS_DIRECTORY ${D})
+    install_helper(DIRECTORY ${D}
+                   DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/nvim/runtime/)
+  endif()
 endforeach()
 
-globrecurse_wrapper(RUNTIME_FILES ${CMAKE_CURRENT_SOURCE_DIR}
-  *.vim *.lua *.scm *.dict *.py *.rb *.ps *.spl *.tutor *.tutor.json)
-
-foreach(F ${RUNTIME_FILES})
-  get_filename_component(BASEDIR ${F} DIRECTORY)
-  install_helper(FILES ${F}
-                 DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/nvim/runtime/${BASEDIR})
-endforeach()
+# only foo.sh script in runtime/
+install_helper(PROGRAMS ${CMAKE_CURRENT_SOURCE_DIR}/macros/less.sh DESTINATION ${CMAKE_INSTALL_DATAROOTDIR}/nvim/runtime/macros/)

@@ -28,9 +28,9 @@ end
 --- If only start_lnum is specified, return a single line as a string.
 --- If both start_lnum and end_lnum are omitted, return all lines from the buffer.
 ---
----@param bufnr number|nil The buffer to get the lines from
----@param start_lnum number|nil The line number of the first line (inclusive, 1-based)
----@param end_lnum number|nil The line number of the last line (inclusive, 1-based)
+---@param bufnr integer|nil The buffer to get the lines from
+---@param start_lnum integer|nil The line number of the first line (inclusive, 1-based)
+---@param end_lnum integer|nil The line number of the last line (inclusive, 1-based)
 ---@return table<string>|string Array of lines, or string when end_lnum is omitted
 function M.getlines(bufnr, start_lnum, end_lnum)
   if end_lnum then
@@ -67,8 +67,8 @@ end
 ---@private
 --- Get the next non-whitespace line in the buffer.
 ---
----@param bufnr number The buffer to get the line from
----@param start_lnum number The line number of the first line to start from (inclusive, 1-based)
+---@param bufnr integer The buffer to get the line from
+---@param start_lnum integer The line number of the first line to start from (inclusive, 1-based)
 ---@return string|nil The first non-blank line if found or `nil` otherwise
 function M.nextnonblank(bufnr, start_lnum)
   for _, line in ipairs(M.getlines(bufnr, start_lnum, -1)) do
@@ -156,6 +156,7 @@ local extension = {
   bas = function(path, bufnr)
     return require('vim.filetype.detect').bas(bufnr)
   end,
+  bass = 'bass',
   bi = function(path, bufnr)
     return require('vim.filetype.detect').bas(bufnr)
   end,
@@ -190,7 +191,9 @@ local extension = {
   BUILD = 'bzl',
   qc = 'c',
   cabal = 'cabal',
+  cairo = 'cairo',
   capnp = 'capnp',
+  cdc = 'cdc',
   cdl = 'cdl',
   toc = 'cdrtoc',
   cfc = 'cf',
@@ -241,6 +244,7 @@ local extension = {
   csh = function(path, bufnr)
     return require('vim.filetype.detect').csh(path, bufnr)
   end,
+  cpon = 'cpon',
   moc = 'cpp',
   hh = 'cpp',
   tlh = 'cpp',
@@ -253,6 +257,10 @@ local extension = {
   tcc = 'cpp',
   hxx = 'cpp',
   hpp = 'cpp',
+  ccm = 'cpp',
+  cppm = 'cpp',
+  cxxm = 'cpp',
+  ['c++m'] = 'cpp',
   cpp = function(path, bufnr)
     return vim.g.cynlib_syntax_for_cpp and 'cynlib' or 'cpp'
   end,
@@ -261,6 +269,7 @@ local extension = {
   end,
   cql = 'cqlang',
   crm = 'crm',
+  cr = 'crystal',
   csx = 'cs',
   cs = 'cs',
   csc = 'csc',
@@ -274,6 +283,7 @@ local extension = {
   feature = 'cucumber',
   cuh = 'cuda',
   cu = 'cuda',
+  cue = 'cue',
   pld = 'cupl',
   si = 'cuplsim',
   cyn = 'cynpp',
@@ -294,6 +304,7 @@ local extension = {
   desc = 'desc',
   directory = 'desktop',
   desktop = 'desktop',
+  dhall = 'dhall',
   diff = 'diff',
   rej = 'diff',
   Dockerfile = 'dockerfile',
@@ -343,6 +354,7 @@ local extension = {
   yaws = 'erlang',
   erb = 'eruby',
   rhtml = 'eruby',
+  esdl = 'esdl',
   ec = 'esqlc',
   EC = 'esqlc',
   strl = 'esterel',
@@ -422,6 +434,7 @@ local extension = {
   fsh = 'fsh',
   fsi = 'fsharp',
   fsx = 'fsharp',
+  fc = 'func',
   fusion = 'fusion',
   gdb = 'gdb',
   gdmo = 'gdmo',
@@ -584,6 +597,7 @@ local extension = {
   lte = 'latte',
   ld = 'ld',
   ldif = 'ldif',
+  lean = 'lean',
   journal = 'ledger',
   ldg = 'ledger',
   ledger = 'ledger',
@@ -605,6 +619,7 @@ local extension = {
   asd = 'lisp',
   lt = 'lite',
   lite = 'lite',
+  livemd = 'livebook',
   lgt = 'logtalk',
   lotos = 'lotos',
   lot = 'lotos',
@@ -622,6 +637,7 @@ local extension = {
   nse = 'lua',
   rockspec = 'lua',
   lua = 'lua',
+  luau = 'luau',
   lrc = 'lyrics',
   m = function(path, bufnr)
     return require('vim.filetype.detect').m(bufnr)
@@ -690,6 +706,7 @@ local extension = {
   isc = 'monk',
   moo = 'moo',
   moon = 'moonscript',
+  move = 'move',
   mp = 'mp',
   mpiv = function(path, bufnr)
     return 'mp', function(b)
@@ -744,6 +761,7 @@ local extension = {
   mli = 'ocaml',
   ml = 'ocaml',
   occ = 'occam',
+  odin = 'odin',
   xom = 'omnimark',
   xin = 'omnimark',
   opam = 'opam',
@@ -791,6 +809,7 @@ local extension = {
   pod = 'pod',
   filter = 'poefilter',
   pk = 'poke',
+  pony = 'pony',
   ps = 'postscr',
   epsi = 'postscr',
   afm = 'postscr',
@@ -807,6 +826,7 @@ local extension = {
   pdb = 'prolog',
   pml = 'promela',
   proto = 'proto',
+  prql = 'prql',
   ['psd1'] = 'ps1',
   ['psm1'] = 'ps1',
   ['ps1'] = 'ps1',
@@ -828,6 +848,9 @@ local extension = {
   R = function(path, bufnr)
     return require('vim.filetype.detect').r(bufnr)
   end,
+  rkt = 'racket',
+  rktd = 'racket',
+  rktl = 'racket',
   rad = 'radiance',
   mat = 'radiance',
   ['pod6'] = 'raku',
@@ -870,8 +893,11 @@ local extension = {
   Snw = 'rnoweb',
   robot = 'robot',
   resource = 'robot',
+  ron = 'ron',
   rsc = 'routeros',
   x = 'rpcgen',
+  rpgle = 'rpgle',
+  rpgleinc = 'rpgle',
   rpl = 'rpl',
   Srst = 'rrst',
   srst = 'rrst',
@@ -889,6 +915,7 @@ local extension = {
   builder = 'ruby',
   rake = 'ruby',
   rs = 'rust',
+  sage = 'sage',
   sas = 'sas',
   sass = 'sass',
   sa = 'sather',
@@ -897,9 +924,6 @@ local extension = {
   ss = 'scheme',
   scm = 'scheme',
   sld = 'scheme',
-  rkt = 'scheme',
-  rktd = 'scheme',
-  rktl = 'scheme',
   sce = 'scilab',
   sci = 'scilab',
   scss = 'scss',
@@ -973,7 +997,9 @@ local extension = {
   spi = 'spyce',
   spy = 'spyce',
   tyc = 'sql',
-  typ = 'sql',
+  typ = function(path, bufnr)
+    return require('vim.filetype.detect').typ(bufnr)
+  end,
   pkb = 'sql',
   tyb = 'sql',
   pks = 'sql',
@@ -990,6 +1016,9 @@ local extension = {
   ssa = 'ssa',
   ass = 'ssa',
   st = 'st',
+  ipd = 'starlark',
+  star = 'starlark',
+  starlark = 'starlark',
   imata = 'stata',
   ['do'] = 'stata',
   mata = 'stata',
@@ -1002,7 +1031,9 @@ local extension = {
   swift = 'swift',
   svh = 'systemverilog',
   sv = 'systemverilog',
+  td = 'tablegen',
   tak = 'tak',
+  tal = 'tal',
   task = 'taskedit',
   tm = 'tcl',
   tcl = 'tcl',
@@ -1048,6 +1079,7 @@ local extension = {
   uc = 'uc',
   uit = 'uil',
   uil = 'uil',
+  ungram = 'ungrammar',
   sba = 'vb',
   vb = 'vb',
   dsm = 'vb',
@@ -1062,7 +1094,9 @@ local extension = {
   vr = 'vera',
   vri = 'vera',
   vrh = 'vera',
-  v = 'verilog',
+  v = function(path, bufnr)
+    return require('vim.filetype.detect').v(bufnr)
+  end,
   va = 'verilogams',
   vams = 'verilogams',
   vhdl = 'vhdl',
@@ -1079,11 +1113,12 @@ local extension = {
   wrl = 'vrml',
   vroom = 'vroom',
   vue = 'vue',
-  wat = 'wast',
   wast = 'wast',
+  wat = 'wat',
   wdl = 'wdl',
   wm = 'webmacro',
   wbt = 'winbatch',
+  wit = 'wit',
   wml = 'wml',
   wsml = 'wsml',
   ad = 'xdefaults',
@@ -1126,6 +1161,7 @@ local extension = {
   yml = 'yaml',
   yaml = 'yaml',
   yang = 'yang',
+  yuck = 'yuck',
   ['z8a'] = 'z8a',
   zig = 'zig',
   zir = 'zir',
@@ -1433,10 +1469,12 @@ local filename = {
   gnashrc = 'gnash',
   ['.gnuplot'] = 'gnuplot',
   ['go.sum'] = 'gosum',
+  ['go.work.sum'] = 'gosum',
   ['go.work'] = 'gowork',
   ['.gprc'] = 'gp',
   ['/.gnupg/gpg.conf'] = 'gpg',
   ['/.gnupg/options'] = 'gpg',
+  ['Jenkinsfile'] = 'groovy',
   ['/var/backups/gshadow.bak'] = 'group',
   ['/etc/gshadow'] = 'group',
   ['/etc/group-'] = 'group',
@@ -1489,6 +1527,7 @@ local filename = {
   ['.lsl'] = function(path, bufnr)
     return require('vim.filetype.detect').lsl(bufnr)
   end,
+  ['.busted'] = 'lua',
   ['.luacheckrc'] = 'lua',
   ['lynx.cfg'] = 'lynx',
   ['m3overrides'] = 'm3build',
@@ -1519,6 +1558,8 @@ local filename = {
   NEWS = function(path, bufnr)
     return require('vim.filetype.detect').news(bufnr)
   end,
+  ['env.nu'] = 'nu',
+  ['config.nu'] = 'nu',
   ['.ocamlinit'] = 'ocaml',
   ['.octaverc'] = 'octave',
   octaverc = 'octave',
@@ -1572,6 +1613,7 @@ local filename = {
   ['.pythonstartup'] = 'python',
   ['.pythonrc'] = 'python',
   SConstruct = 'python',
+  qmldir = 'qmldir',
   ['.Rprofile'] = 'r',
   ['Rprofile'] = 'r',
   ['Rprofile.site'] = 'r',
@@ -2444,6 +2486,7 @@ local function match_pattern(name, path, tail, pat)
       return false
     end
   end
+
   -- If the pattern contains a / match against the full path, otherwise just the tail
   local fullpat = '^' .. pat .. '$'
   local matches
@@ -2521,64 +2564,64 @@ function M.match(args)
     name = api.nvim_buf_get_name(bufnr)
   end
 
-  if name then
-    name = normalize_path(name)
-  end
-
   local ft, on_detect
 
-  -- First check for the simple case where the full path exists as a key
-  local path = vim.fn.fnamemodify(name, ':p')
-  ft, on_detect = dispatch(filename[path], path, bufnr)
-  if ft then
-    return ft, on_detect
-  end
+  if name then
+    name = normalize_path(name)
 
-  -- Next check against just the file name
-  local tail = vim.fn.fnamemodify(name, ':t')
-  ft, on_detect = dispatch(filename[tail], path, bufnr)
-  if ft then
-    return ft, on_detect
-  end
-
-  -- Next, check the file path against available patterns with non-negative priority
-  local j = 1
-  for i, v in ipairs(pattern_sorted) do
-    local k = next(v)
-    local opts = v[k][2]
-    if opts.priority < 0 then
-      j = i
-      break
+    -- First check for the simple case where the full path exists as a key
+    local path = vim.fn.fnamemodify(name, ':p')
+    ft, on_detect = dispatch(filename[path], path, bufnr)
+    if ft then
+      return ft, on_detect
     end
 
-    local filetype = v[k][1]
-    local matches = match_pattern(name, path, tail, k)
-    if matches then
-      ft, on_detect = dispatch(filetype, path, bufnr, matches)
-      if ft then
-        return ft, on_detect
+    -- Next check against just the file name
+    local tail = vim.fn.fnamemodify(name, ':t')
+    ft, on_detect = dispatch(filename[tail], path, bufnr)
+    if ft then
+      return ft, on_detect
+    end
+
+    -- Next, check the file path against available patterns with non-negative priority
+    local j = 1
+    for i, v in ipairs(pattern_sorted) do
+      local k = next(v)
+      local opts = v[k][2]
+      if opts.priority < 0 then
+        j = i
+        break
+      end
+
+      local filetype = v[k][1]
+      local matches = match_pattern(name, path, tail, k)
+      if matches then
+        ft, on_detect = dispatch(filetype, path, bufnr, matches)
+        if ft then
+          return ft, on_detect
+        end
       end
     end
-  end
 
-  -- Next, check file extension
-  local ext = vim.fn.fnamemodify(name, ':e')
-  ft, on_detect = dispatch(extension[ext], path, bufnr)
-  if ft then
-    return ft, on_detect
-  end
+    -- Next, check file extension
+    local ext = vim.fn.fnamemodify(name, ':e')
+    ft, on_detect = dispatch(extension[ext], path, bufnr)
+    if ft then
+      return ft, on_detect
+    end
 
-  -- Next, check patterns with negative priority
-  for i = j, #pattern_sorted do
-    local v = pattern_sorted[i]
-    local k = next(v)
+    -- Next, check patterns with negative priority
+    for i = j, #pattern_sorted do
+      local v = pattern_sorted[i]
+      local k = next(v)
 
-    local filetype = v[k][1]
-    local matches = match_pattern(name, path, tail, k)
-    if matches then
-      ft, on_detect = dispatch(filetype, path, bufnr, matches)
-      if ft then
-        return ft, on_detect
+      local filetype = v[k][1]
+      local matches = match_pattern(name, path, tail, k)
+      if matches then
+        ft, on_detect = dispatch(filetype, path, bufnr, matches)
+        if ft then
+          return ft, on_detect
+        end
       end
     end
   end
@@ -2598,11 +2641,33 @@ function M.match(args)
     -- If the function tries to use the filename that is nil then it will fail,
     -- but this enables checks which do not need a filename to still work.
     local ok
-    ok, ft = pcall(require('vim.filetype.detect').match_contents, contents, name)
+    ok, ft = pcall(require('vim.filetype.detect').match_contents, contents, name, function(ext)
+      return dispatch(extension[ext], name, bufnr)
+    end)
     if ok and ft then
       return ft
     end
   end
+end
+
+--- Get the default option value for a {filetype}.
+---
+--- The returned value is what would be set in a new buffer after 'filetype'
+--- is set, meaning it should respect all FileType autocmds and ftplugin files.
+---
+--- Example:
+--- <pre>lua
+---   vim.filetype.get_option('vim', 'commentstring')
+--- </pre>
+---
+--- Note: this uses |nvim_get_option_value()| but caches the result.
+--- This means |ftplugin| and |FileType| autocommands are only
+--- triggered once and may not reflect later changes.
+--- @param filetype string Filetype
+--- @param option string Option name
+--- @return string|boolean|integer: Option value
+function M.get_option(filetype, option)
+  return require('vim.filetype.options').get_option(filetype, option)
 end
 
 return M

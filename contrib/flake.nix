@@ -16,6 +16,9 @@
           preConfigure = ''
             sed -i cmake.config/versiondef.h.in -e 's/@NVIM_VERSION_PRERELEASE@/-dev-${version}/'
           '';
+          nativeBuildInputs = oa.nativeBuildInputs ++ [
+            final.libiconv
+          ];
         });
 
         # a development binary to help debug issues
@@ -33,7 +36,6 @@
           NIX_CFLAGS_COMPILE = " -ggdb -Og";
 
           cmakeBuildType = "Debug";
-          cmakeFlags = oa.cmakeFlags ++ [ "-DMIN_LOG_LEVEL=0" ];
 
           disallowedReferences = [ ];
         });
@@ -45,12 +47,11 @@
         }).overrideAttrs (oa: {
           cmakeFlags = oa.cmakeFlags ++ [
             "-DLUACHECK_PRG=${luacheck}/bin/luacheck"
-            "-DMIN_LOG_LEVEL=0"
             "-DENABLE_LTO=OFF"
           ] ++ final.lib.optionals final.stdenv.isLinux [
             # https://github.com/google/sanitizers/wiki/AddressSanitizerFlags
             # https://clang.llvm.org/docs/AddressSanitizer.html#symbolizing-the-reports
-            "-DCLANG_ASAN_UBSAN=ON"
+            "-DENABLE_ASAN_UBSAN=ON"
           ];
         });
       };

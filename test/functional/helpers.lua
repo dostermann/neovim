@@ -1,14 +1,10 @@
-require('coxpcall')
 local luv = require('luv')
-local lfs = require('lfs')
-local mpack = require('mpack')
 local global_helpers = require('test.helpers')
 
--- nvim client: Found in .deps/usr/share/lua/<version>/nvim/ if "bundled".
-local Session = require('nvim.session')
-local TcpStream = require('nvim.tcp_stream')
-local SocketStream = require('nvim.socket_stream')
-local ChildProcessStream = require('nvim.child_process_stream')
+local Session = require('test.client.session')
+local uv_stream = require('test.client.uv_stream')
+local SocketStream = uv_stream.SocketStream
+local ChildProcessStream = uv_stream.ChildProcessStream
 
 local check_cores = global_helpers.check_cores
 local check_logs = global_helpers.check_logs
@@ -23,11 +19,9 @@ local tbl_contains = global_helpers.tbl_contains
 local fail = global_helpers.fail
 
 local module = {
-  NIL = mpack.NIL,
-  mkdir = lfs.mkdir,
 }
 
-local start_dir = lfs.currentdir()
+local start_dir = luv.cwd()
 local runtime_set = 'set runtimepath^=./build/lib/nvim/'
 module.nvim_prog = (
   os.getenv('NVIM_PRG')
@@ -202,7 +196,7 @@ function module.expect_msg_seq(...)
 end
 
 local function call_and_stop_on_error(lsession, ...)
-  local status, result = copcall(...)  -- luacheck: ignore
+  local status, result = Session.safe_pcall(...)  -- luacheck: ignore
   if not status then
     lsession:stop()
     last_error = result
@@ -428,7 +422,7 @@ end
 -- Creates a new Session connected by domain socket (named pipe) or TCP.
 function module.connect(file_or_address)
   local addr, port = string.match(file_or_address, "(.*):(%d+)")
-  local stream = (addr and port) and TcpStream.open(addr, port) or
+  local stream = (addr and port) and SocketStream.connect(addr, port) or
     SocketStream.open(file_or_address)
   return Session.new(stream)
 end
@@ -537,7 +531,7 @@ function module.feed_command(...)
   end
 end
 
--- @deprecated use nvim_exec()
+-- @deprecated use nvim_exec2()
 function module.source(code)
   module.exec(dedent(code))
 end
@@ -557,16 +551,18 @@ function module.set_shell_powershell(fake)
     assert(found)
   end
   local shell = found and (is_os('win') and 'powershell' or 'pwsh') or module.testprg('pwsh-test')
-  local set_encoding = '[Console]::InputEncoding=[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new();'
-  local cmd = set_encoding..'Remove-Item -Force '..table.concat(is_os('win')
-    and {'alias:cat', 'alias:echo', 'alias:sleep', 'alias:sort'}
+  local cmd = 'Remove-Item -Force '..table.concat(is_os('win')
+    and {'alias:cat', 'alias:echo', 'alias:sleep', 'alias:sort', 'alias:tee'}
     or  {'alias:echo'}, ',')..';'
   module.exec([[
     let &shell = ']]..shell..[['
     set shellquote= shellxquote=
-    let &shellcmdflag = '-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -Command ]]..cmd..[['
-    let &shellpipe = '2>&1 | Out-File -Encoding UTF8 %s; exit $LastExitCode'
-    let &shellredir = '2>&1 | Out-File -Encoding UTF8 %s; exit $LastExitCode'
+    let &shellcmdflag = '-NoLogo -NoProfile -ExecutionPolicy RemoteSigned -Command '
+    let &shellcmdflag .= '[Console]::InputEncoding=[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new();'
+    let &shellcmdflag .= '$PSDefaultParameterValues[''Out-File:Encoding'']=''utf8'';'
+    let &shellcmdflag .= ']]..cmd..[['
+    let &shellredir = '2>&1 | %%{ "$_" } | Out-File %s; exit $LastExitCode'
+    let &shellpipe  = '2>&1 | %%{ "$_" } | tee %s; exit $LastExitCode'
   ]])
   return found
 end
@@ -732,21 +728,17 @@ function module.assert_visible(bufnr, visible)
 end
 
 local function do_rmdir(path)
-  local mode, errmsg, errcode = lfs.attributes(path, 'mode')
-  if mode == nil then
-    if errcode == 2 then
-      -- "No such file or directory", don't complain.
-      return
-    end
-    error(string.format('rmdir: %s (%d)', errmsg, errcode))
+  local stat = luv.fs_stat(path)
+  if stat == nil then
+    return
   end
-  if mode ~= 'directory' then
+  if stat.type ~= 'directory' then
     error(string.format('rmdir: not a directory: %s', path))
   end
-  for file in lfs.dir(path) do
+  for file in vim.fs.dir(path) do
     if file ~= '.' and file ~= '..' then
       local abspath = path..'/'..file
-      if lfs.attributes(abspath, 'mode') == 'directory' then
+      if global_helpers.isdir(abspath) then
         do_rmdir(abspath)  -- recurse
       else
         local ret, err = os.remove(abspath)
@@ -766,9 +758,9 @@ local function do_rmdir(path)
       end
     end
   end
-  local ret, err = lfs.rmdir(path)
+  local ret, err = luv.fs_rmdir(path)
   if not ret then
-    error('lfs.rmdir('..path..'): '..err)
+    error('luv.fs_rmdir('..path..'): '..err)
   end
 end
 
@@ -828,11 +820,11 @@ function module.skip_fragile(pending_fn, cond)
 end
 
 function module.exec(code)
-  return module.meths.exec(code, false)
+  module.meths.exec2(code, {})
 end
 
 function module.exec_capture(code)
-  return module.meths.exec(code, true)
+  return module.meths.exec2(code, { output = true }).output
 end
 
 function module.exec_lua(code, ...)
@@ -902,7 +894,7 @@ local load_factor = 1
 if global_helpers.is_ci() then
   -- Compute load factor only once (but outside of any tests).
   module.clear()
-  module.request('nvim_command', 'source src/nvim/testdir/load.vim')
+  module.request('nvim_command', 'source test/old/testdir/load.vim')
   load_factor = module.request('nvim_eval', 'g:test_load_factor')
 end
 function module.load_adjust(num)
